@@ -1,5 +1,9 @@
 import sys
 import requests
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
 def fetch_pr_details(pr_url):
@@ -13,13 +17,36 @@ def fetch_pr_details(pr_url):
     pull_number = parts[parts.index("pull") + 1]
     owner = parts[3]
     repo = parts[4]
+    github_token = os.getenv("GITHUB_TOKEN")
+
+    if github_token:
+        print("GitHub token loaded successfully")
+    else:
+        print("GitHub token NOT loaded")
+
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+    }
+
     requestapi = (
         f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/files"
     )
     print("requested api url is: ")
     print(requestapi)
 
-    response = requests.get(requestapi)
+    response = requests.get(requestapi, headers=headers)
+
+    if response.status_code == 401:
+        print("Error 401: GitHub token is invalid, expired, or revoked.")
+        return []
+
+    if response.status_code == 403:
+        print(
+            "Error 403: GitHub token is valid, but does not have sufficient permission."
+        )
+        return []
+
     if response.status_code != 200:
         print("Error:", response.status_code, response.text)
         return []
