@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SonarQube / SonarScanner
+.scannerwork/
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+.scannerwork/
+__pycache__/
+*.pyc
+.env
+output.txt

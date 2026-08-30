@@ -60,6 +60,46 @@ def fetch_pr_details(pr_url):
     return details
 
 
+def fetch_pr_info(pr_url):
+    parts = pr_url.split("/")
+
+    if "pull" not in parts:
+        print(
+            "Error: Invalid GitHub Pull Request URL. Missing '/pull/'.",
+            file=sys.stderr,
+        )
+        return None
+
+    pull_number = parts[parts.index("pull") + 1]
+    owner = parts[3]
+    repo = parts[4]
+
+    github_token = os.getenv("GITHUB_TOKEN")
+
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    requestapi = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}"
+
+    response = requests.get(requestapi, headers=headers)
+
+    if response.status_code != 200:
+        print("Error:", response.status_code, response.text)
+        return None
+
+    data = response.json()
+
+    return {
+        "owner": owner,
+        "repo": repo,
+        "pull_number": pull_number,
+        "head_sha": data["head"]["sha"],
+        "clone_url": data["head"]["repo"]["clone_url"],
+    }
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python github_client.py <GitHub Pull Request URL>")
