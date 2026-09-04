@@ -36,9 +36,13 @@ def check_vulnerabilities(pr_url):
         "dependencies-nested.json": "PyPI",
         "dependencies-simple.json": "PyPI",
     }
-    for file, patch_details in details:
+
+    if not details:
+        return []
+
+    for file, patchs in details["changed_files"]:
         filename = file
-        patch = patch_details
+        patch = patchs
         lineno = None
         # ------------------------FILE SCANING BEGINS HERE----------------------------------------------------------------------------------------------
         if filename.lower() in dependency_ecosystems:

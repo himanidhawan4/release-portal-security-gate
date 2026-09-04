@@ -94,9 +94,13 @@ def check_wildcards(pr_url):
         },
     }
     details = github_client.fetch_pr_details(pr_url)
-    for file, patch_details in details:
+
+    if not details:
+        return []
+
+    for file, patchs in details["changed_files"]:
         filename = file
-        patch = patch_details
+        patch = patchs
         lineno = None
 
         if filename.lower().endswith((".tf", ".json")):

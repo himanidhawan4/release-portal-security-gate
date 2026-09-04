@@ -240,8 +240,11 @@ def check_secrets_in_pr(pr_url):
     ):
 
         data = github_client.fetch_pr_details(pr_url)
+        
+        if not data:
+            return []
 
-        for file, patchs in data:
+        for file, patchs in data["changed_files"]:
             filename = file
             patch = patchs.splitlines()
 
