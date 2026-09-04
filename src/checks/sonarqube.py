@@ -1,401 +1,268 @@
 import os
-import re
+import sys
 import json
 import time
 import shutil
 import tempfile
 import subprocess
 import requests
-import sys
 
 from dotenv import load_dotenv
+import src.github_client as github_client
 
 load_dotenv()
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-SONAR_TOKEN_ERROR = "SONAR_TOKEN is not configured."
-
-SONAR_URL = "https://sonarcloud.io"
-
-SONAR_SCANNER = (
-    r"C:\Users\Himani Dhawan\Downloads"
-    r"\sonar-scanner-cli-8.1.0.6389-windows-x64"
-    r"\sonar-scanner-8.1.0.6389-windows-x64"
-    r"\bin\sonar-scanner.bat"
+SONAR_TOKEN = os.getenv("SONAR_TOKEN")
+SONAR_ORGANIZATION = os.getenv("SONAR_ORGANIZATION", "himanidhawan4")
+SONAR_PROJECT_KEY = os.getenv(
+    "SONAR_PROJECT_KEY", "himanidhawan4_release-portal-security-gate-test"
 )
+SONAR_SCANNER_PATH = os.getenv("SONAR_SCANNER_PATH")
 
 
-# ============================================================
-# IMPORT GITHUB CLIENT
-# ============================================================
-
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-
-sys.path.insert(0, PROJECT_ROOT)
-
-try:
-    from src.github_client import fetch_pr_details
-except ImportError:
-    from github_client import fetch_pr_details
+SONAR_API_URL = "https://sonarcloud.io/api"
 
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+# ================================================================
+# FIND SONAR SCANNER
+# ================================================================
 
 
-def clean_html(text):
+def find_sonar_scanner():
     """
-    Remove HTML tags from SonarCloud descriptions.
-    """
-    if not text:
-        return ""
-
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
-
-
-def get_project_root():
-    """
-    Return project root directory.
-    """
-    return PROJECT_ROOT
-
-
-def copy_sonar_properties(workspace):
-    """
-    Copy sonar-project.properties from the main project
-    into the temporary cloned workspace.
+    Find SonarScanner either from SONAR_SCANNER_PATH
+    or from the system PATH.
     """
 
-    source = os.path.join(get_project_root(), "sonar-project.properties")
+    if SONAR_SCANNER_PATH:
+        if os.path.exists(SONAR_SCANNER_PATH):
+            return SONAR_SCANNER_PATH
 
-    destination = os.path.join(workspace, "sonar-project.properties")
+        print(
+            "Error: SONAR_SCANNER_PATH was provided but the file was not found.",
+            file=sys.stderr,
+        )
+        return None
 
-    if not os.path.exists(source):
-        raise FileNotFoundError("sonar-project.properties was not found.")
+    scanner_names = [
+        "sonar-scanner",
+        "sonar-scanner.bat",
+    ]
 
-    shutil.copy2(source, destination)
+    for scanner in scanner_names:
 
+        scanner_path = shutil.which(scanner)
 
-def get_sonar_property(property_name):
-    """
-    Read a property from sonar-project.properties.
-    """
-
-    properties_file = os.path.join(get_project_root(), "sonar-project.properties")
-
-    if not os.path.exists(properties_file):
-        raise FileNotFoundError("sonar-project.properties was not found.")
-
-    with open(properties_file, "r", encoding="utf-8") as file:
-
-        for line in file:
-
-            line = line.strip()
-
-            if not line or line.startswith("#"):
-                continue
-
-            if "=" not in line:
-                continue
-
-            key, value = line.split("=", 1)
-
-            if key.strip() == property_name:
-                return value.strip()
+        if scanner_path:
+            return scanner_path
 
     return None
 
 
-# ============================================================
-# PREPARE PR WORKSPACE
-# ============================================================
+# ================================================================
+# SONARCLOUD API REQUEST
+# ================================================================
 
 
-def prepare_pr_workspace(pr_url):
+def sonar_request(endpoint, params=None):
     """
-    Clone the GitHub repository into a temporary directory
-    and checkout the exact PR commit.
-
-    Returns:
-        workspace
-        pr_details
+    Send an authenticated GET request to SonarCloud.
     """
 
-    pr_details = fetch_pr_details(pr_url)
-
-    if not pr_details:
-        raise RuntimeError("Unable to fetch Pull Request details from GitHub.")
-
-    # --------------------------------------------------------
-    # Repository URL
-    # --------------------------------------------------------
-
-    repo_url = (
-        pr_details.get("clone_url")
-        or pr_details.get("repo_url")
-        or pr_details.get("html_url")
-    )
-
-    if not repo_url:
-        raise RuntimeError("Repository URL could not be determined from PR details.")
-
-    # --------------------------------------------------------
-    # PR HEAD SHA
-    # --------------------------------------------------------
-
-    head_sha = (
-        pr_details.get("head_sha")
-        or pr_details.get("sha")
-        or pr_details.get("commit_sha")
-    )
-
-    if not head_sha:
-        raise RuntimeError("PR head commit SHA could not be determined.")
-
-    # --------------------------------------------------------
-    # Temporary workspace
-    # --------------------------------------------------------
-
-    workspace = tempfile.mkdtemp(prefix="sonar_pr_")
-
-    print("Cloning repository...")
-
-    clone_result = subprocess.run(
-        ["git", "clone", repo_url, workspace], capture_output=True, text=True
-    )
-
-    if clone_result.returncode != 0:
-
-        shutil.rmtree(workspace, ignore_errors=True)
-
-        raise RuntimeError("Git clone failed:\n" + clone_result.stderr)
-
-    # --------------------------------------------------------
-    # Fetch exact PR commit
-    # --------------------------------------------------------
-
-    fetch_result = subprocess.run(
-        ["git", "-C", workspace, "fetch", "origin", head_sha],
-        capture_output=True,
-        text=True,
-    )
-
-    if fetch_result.returncode != 0:
-
-        shutil.rmtree(workspace, ignore_errors=True)
-
-        raise RuntimeError("Unable to fetch PR commit:\n" + fetch_result.stderr)
-
-    print(f"Checking out PR commit: {head_sha}")
-
-    checkout_result = subprocess.run(
-        ["git", "-C", workspace, "checkout", "--detach", head_sha],
-        capture_output=True,
-        text=True,
-    )
-
-    if checkout_result.returncode != 0:
-
-        shutil.rmtree(workspace, ignore_errors=True)
-
-        raise RuntimeError("Unable to checkout PR commit:\n" + checkout_result.stderr)
-
-    # --------------------------------------------------------
-    # Copy Sonar properties
-    # --------------------------------------------------------
-
-    copy_sonar_properties(workspace)
-
-    return workspace, pr_details
-
-
-# ============================================================
-# PR INFORMATION
-# ============================================================
-
-
-def get_pr_number(pr_url, pr_details):
-    """
-    Get Pull Request number.
-    """
-
-    possible_keys = ["number", "pr_number", "pull_request_number"]
-
-    for key in possible_keys:
-
-        value = pr_details.get(key)
-
-        if value is not None:
-            return str(value)
-
-    match = re.search(r"/pull/(\d+)", pr_url)
-
-    if match:
-        return match.group(1)
-
-    raise RuntimeError("Pull Request number could not be determined.")
-
-
-def get_pr_branch_information(pr_details):
-    """
-    Extract source/head branch and target/base branch
-    from GitHub PR details.
-    """
-
-    head_branch = None
-    base_branch = None
-
-    # --------------------------------------------------------
-    # Direct fields
-    # --------------------------------------------------------
-
-    head_branch = (
-        pr_details.get("head_branch")
-        or pr_details.get("source_branch")
-        or pr_details.get("head_ref")
-    )
-
-    base_branch = (
-        pr_details.get("base_branch")
-        or pr_details.get("target_branch")
-        or pr_details.get("base_ref")
-    )
-
-    # --------------------------------------------------------
-    # Nested GitHub PR format
-    # --------------------------------------------------------
-
-    head = pr_details.get("head")
-
-    if isinstance(head, dict):
-
-        head_branch = head_branch or head.get("ref")
-
-    base = pr_details.get("base")
-
-    if isinstance(base, dict):
-
-        base_branch = base_branch or base.get("ref")
-
-    if not head_branch:
-        raise RuntimeError("PR source/head branch could not be determined.")
-
-    if not base_branch:
-        raise RuntimeError("PR target/base branch could not be determined.")
-
-    return head_branch, base_branch
-
-
-# ============================================================
-# RUN SONAR SCANNER
-# ============================================================
-
-
-def run_sonar_scan(workspace, sonar_token, pr_number, head_branch, base_branch):
-    """
-    Run SonarScanner as a Pull Request analysis.
-    """
-
-    if not os.path.exists(SONAR_SCANNER):
-
-        raise FileNotFoundError(f"SonarScanner was not found at:\n{SONAR_SCANNER}")
-
-    print("Running SonarCloud scan...")
-
-    command = [
-        SONAR_SCANNER,
-        f"-Dsonar.token={sonar_token}",
-        f"-Dsonar.pullrequest.key={pr_number}",
-        f"-Dsonar.pullrequest.branch={head_branch}",
-        f"-Dsonar.pullrequest.base={base_branch}",
-    ]
-
-    result = subprocess.run(command, cwd=workspace, capture_output=True, text=True)
-
-    if result.returncode != 0:
-
-        print("\nSonarScanner output:")
-        print(result.stdout)
-
-        print("\nSonarScanner error:")
-        print(result.stderr)
-
-        raise RuntimeError("SonarCloud scan failed.")
-
-    print("SonarCloud scan completed.")
-
-    return result.stdout
-
-
-# ============================================================
-# WAIT FOR SONARCLOUD ANALYSIS
-# ============================================================
-
-
-def wait_for_sonar_analysis(scanner_output, sonar_token, timeout=300):
-    """
-    Wait until SonarCloud processing finishes.
-
-    Returns:
-        analysisId
-    """
-
-    ce_task_id = None
-
-    # --------------------------------------------------------
-    # Try to find ceTaskId
-    # --------------------------------------------------------
-
-    match = re.search(r"ceTaskId[=:]\s*([a-zA-Z0-9_-]+)", scanner_output)
-
-    if match:
-        ce_task_id = match.group(1)
-
-    # --------------------------------------------------------
-    # Try task URL
-    # --------------------------------------------------------
-
-    if not ce_task_id:
-
-        match = re.search(r"/api/ce/task\?id=([a-zA-Z0-9_-]+)", scanner_output)
-
-        if match:
-            ce_task_id = match.group(1)
-
-    if not ce_task_id:
-
-        raise RuntimeError("Could not find SonarCloud CE task ID.")
-
-    print("Waiting for SonarCloud analysis to complete...")
-
-    headers = {"Authorization": f"Bearer {sonar_token}"}
-
-    start_time = time.time()
-
-    while True:
-
-        if time.time() - start_time > timeout:
-
-            raise TimeoutError("Timed out waiting for SonarCloud analysis.")
+    if not SONAR_TOKEN:
+        print("Error: SONAR_TOKEN is not configured.", file=sys.stderr)
+        return None
+
+    try:
 
         response = requests.get(
-            f"{SONAR_URL}/api/ce/task",
-            headers=headers,
-            params={"id": ce_task_id},
+            f"{SONAR_API_URL}{endpoint}",
+            params=params,
+            auth=(SONAR_TOKEN, ""),
             timeout=30,
         )
 
         response.raise_for_status()
 
-        data = response.json()
+        return response.json()
+
+    except requests.RequestException as e:
+
+        print(f"SonarCloud API error: {str(e)}", file=sys.stderr)
+
+        return None
+
+
+# ================================================================
+# EXTRACT RULE INFORMATION
+# ================================================================
+
+
+def get_rule_details(rule_key):
+    """
+    Dynamically retrieve rule information from SonarCloud.
+
+    No rule IDs are hard-coded.
+    """
+
+    data = sonar_request("/rules/show", params={"key": rule_key})
+
+    if not data or "rule" not in data:
+        return {
+            "rule_name": rule_key,
+            "reason": "No additional explanation available.",
+            "recommendation": "Review the SonarCloud rule documentation.",
+        }
+
+    rule = data["rule"]
+
+    rule_name = rule.get("name") or rule_key
+
+    description_sections = rule.get("descriptionSections", [])
+
+    reason = None
+    recommendations = []
+
+    for section in description_sections:
+
+        section_key = section.get("key")
+        content = section.get("content", "")
+
+        if section_key == "root_cause":
+            reason = clean_sonar_text(content)
+
+        elif section_key == "how_to_fix":
+            cleaned = clean_sonar_text(content)
+
+            if cleaned:
+                recommendations.append(cleaned)
+
+    # Fallback if SonarCloud does not provide root_cause
+    if not reason:
+
+        reason = clean_sonar_text(rule.get("htmlDesc", ""))
+
+    if not reason:
+        reason = "No additional explanation available."
+
+    if recommendations:
+
+        recommendation = "\n\n".join(recommendations)
+
+    else:
+
+        recommendation = (
+            "Review the SonarCloud rule guidance "
+            "and modify the code according to the "
+            "recommended secure practice."
+        )
+
+    return {
+        "rule_name": rule_name,
+        "reason": reason,
+        "recommendation": recommendation,
+    }
+
+
+# ================================================================
+# CLEAN SONARCLOUD TEXT
+# ================================================================
+
+
+def clean_sonar_text(text):
+    """
+    Remove basic HTML and unnecessary whitespace from
+    SonarCloud descriptions.
+    """
+
+    if not text:
+        return ""
+
+    replacements = {
+        "<p>": "",
+        "</p>": "\n\n",
+        "<br>": "\n",
+        "<br/>": "\n",
+        "<br />": "\n",
+        "<code>": "",
+        "</code>": "",
+        "<pre>": "",
+        "</pre>": "",
+    }
+
+    cleaned = text
+
+    for old, new in replacements.items():
+        cleaned = cleaned.replace(old, new)
+
+    # Remove remaining HTML tags
+    import re
+
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+
+    cleaned = cleaned.replace("&nbsp;", " ")
+
+    cleaned = cleaned.replace("&quot;", '"')
+
+    cleaned = cleaned.replace("&lt;", "<")
+
+    cleaned = cleaned.replace("&gt;", ">")
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+
+    return cleaned.strip()
+
+
+# ================================================================
+# SHORTEN LONG TEXT
+# ================================================================
+
+
+def shorten_text(text, max_sentences=3):
+    """
+    Keep the explanation readable instead of printing
+    the entire SonarCloud documentation.
+    """
+
+    if not text:
+        return ""
+
+    # Split approximately into sentences.
+    import re
+
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+
+    sentences = [sentence.strip() for sentence in sentences if sentence.strip()]
+
+    if len(sentences) <= max_sentences:
+        return text.strip()
+
+    return " ".join(sentences[:max_sentences]).strip()
+
+
+# ================================================================
+# WAIT FOR SONARCLOUD ANALYSIS
+# ================================================================
+
+
+def wait_for_analysis(task_id):
+    """
+    Wait until SonarCloud finishes processing the scanner task.
+    """
+
+    print("Waiting for SonarCloud analysis to complete...")
+
+    for _ in range(60):
+
+        data = sonar_request("/ce/task", params={"id": task_id})
+
+        if not data:
+
+            time.sleep(5)
+            continue
 
         task = data.get("task", {})
 
@@ -403,423 +270,404 @@ def wait_for_sonar_analysis(scanner_output, sonar_token, timeout=300):
 
         if status == "SUCCESS":
 
-            analysis_id = task.get("analysisId")
-
-            if not analysis_id:
-
-                raise RuntimeError(
-                    "SonarCloud analysis completed but analysisId was missing."
-                )
-
             print("SonarCloud analysis completed successfully.")
 
-            return analysis_id
+            return task
 
         if status in ("FAILED", "CANCELED"):
 
-            raise RuntimeError(f"SonarCloud analysis failed with status: {status}")
+            print(f"SonarCloud analysis failed: {status}", file=sys.stderr)
+
+            return None
 
         time.sleep(5)
 
+    print("Error: Timed out waiting for SonarCloud analysis.", file=sys.stderr)
 
-# ============================================================
-# QUALITY GATE
-# ============================================================
+    return None
 
 
-def get_quality_gate(project_key, sonar_token, organization, pull_request):
+# ================================================================
+# DISPLAY DETAILED FINDINGS
+# ================================================================
+
+
+def display_detailed_findings(findings):
     """
-    Get Quality Gate for a specific Pull Request.
+    Display SonarCloud findings in a human-readable format.
     """
 
-    headers = {"Authorization": f"Bearer {sonar_token}"}
+    print()
+    print("=" * 70)
+    print("🔍 SONARCLOUD DETAILED SECURITY REPORT")
+    print("=" * 70)
 
-    params = {
-        "projectKey": project_key,
-        "organization": organization,
-        "pullRequest": str(pull_request),
-    }
+    if not findings:
 
-    response = requests.get(
-        f"{SONAR_URL}/api/qualitygates/project_status",
-        headers=headers,
-        params=params,
-        timeout=30,
-    )
-
-    if response.status_code != 200:
-
-        print("\nSonarCloud Quality Gate API response:")
-        print(response.text)
+        print()
+        print("✅ No SonarCloud issues were found.")
         print()
 
-        response.raise_for_status()
+        return
 
-    data = response.json()
+    for index, finding in enumerate(findings, start=1):
 
-    project_status = data.get("projectStatus", {})
+        print()
+        print(f"🔴 SECURITY FINDING #{index}")
+        print("-" * 70)
 
-    return project_status.get("status", "UNKNOWN")
+        print(f"📄 File          : " f"{finding.get('filename', 'Unknown')}")
 
+        print(f"📍 Line          : " f"{finding.get('line', 'Unknown')}")
 
-# ============================================================
-# SONARCLOUD RULE DETAILS
-# ============================================================
+        print(f"🔑 Rule          : " f"{finding.get('rule_name', 'Unknown')}")
 
+        print(f"⚠️ Severity      : " f"{finding.get('severity', 'Unknown')}")
 
-def extract_recommendation(rule):
-    """
-    Dynamically extract recommendation from SonarCloud
-    descriptionSections.
+        print(f"🛡️ Type          : " f"{finding.get('type', 'Unknown')}")
 
-    No rule IDs are hard-coded.
-    """
+        print()
+        print("❌ ISSUE")
+        print("-" * 70)
 
-    sections = rule.get("descriptionSections", [])
+        print(finding.get("error", "No issue description available."))
 
-    recommendations = []
+        print()
+        print("💡 WHY IS THIS A PROBLEM?")
+        print("-" * 70)
 
-    for section in sections:
+        reason = shorten_text(finding.get("reason", ""), max_sentences=3)
 
-        if section.get("key") != "how_to_fix":
-            continue
+        print(reason)
 
-        content = clean_html(section.get("content", ""))
+        print()
+        print("🔧 RECOMMENDATION")
+        print("-" * 70)
 
-        if content and content not in recommendations:
-
-            recommendations.append(content)
-
-    if recommendations:
-
-        return "\n\n".join(recommendations)
-
-    return (
-        "Review the SonarCloud rule guidance and " "apply the recommended remediation."
-    )
-
-
-def get_sonar_rule_details(rule_key, sonar_token, organization):
-    """
-    Retrieve rule details dynamically from SonarCloud.
-    """
-
-    headers = {"Authorization": f"Bearer {sonar_token}"}
-
-    response = requests.get(
-        f"{SONAR_URL}/api/rules/show",
-        headers=headers,
-        params={"key": rule_key, "organization": organization},
-        timeout=30,
-    )
-
-    if response.status_code != 200:
-
-        return {
-            "rule_name": rule_key,
-            "reason": ("SonarCloud rule details could not be retrieved."),
-            "recommendation": (
-                "Review this issue in SonarCloud and "
-                "follow the remediation guidance."
-            ),
-        }
-
-    data = response.json()
-
-    rule = data.get("rule", {})
-
-    rule_name = rule.get("name", rule_key)
-
-    # --------------------------------------------------------
-    # Root cause = reason
-    # --------------------------------------------------------
-
-    reason = ""
-
-    sections = rule.get("descriptionSections", [])
-
-    for section in sections:
-
-        if section.get("key") == "root_cause":
-
-            reason = clean_html(section.get("content", ""))
-
-            if reason:
-                break
-
-    # --------------------------------------------------------
-    # Fallback to HTML description
-    # --------------------------------------------------------
-
-    if not reason:
-
-        reason = clean_html(rule.get("htmlDesc", ""))
-
-    if not reason:
-
-        reason = (
-            "SonarCloud identified a potential security "
-            "or code-quality issue based on this rule."
+        recommendation = shorten_text(
+            finding.get("recommendation", ""), max_sentences=4
         )
 
-    # --------------------------------------------------------
-    # Recommendation
-    # --------------------------------------------------------
+        print(recommendation)
 
-    recommendation = extract_recommendation(rule)
+        print()
+        print("-" * 70)
 
-    return {"rule_name": rule_name, "reason": reason, "recommendation": recommendation}
-
-
-# ============================================================
-# CREATE FINDING
-# ============================================================
+    print()
+    print("=" * 70)
+    print(f"📊 Total issues found: {len(findings)}")
+    print("=" * 70)
+    print()
 
 
-def create_sonar_finding(issue, sonar_token, organization, include_details):
+# ================================================================
+# DISPLAY SUMMARY
+# ================================================================
+
+
+def display_summary(result):
     """
-    Convert SonarCloud issue into our standard finding format.
+    Display only the main verdict when the user does not
+    want detailed explanations.
     """
 
-    component = issue.get("component", "")
+    print()
+    print("=" * 70)
+    print("🛡️ SONARCLOUD SECURITY GATE RESULT")
+    print("=" * 70)
 
-    # --------------------------------------------------------
-    # Extract filename
-    # --------------------------------------------------------
+    quality_gate = result.get("quality_gate", "UNKNOWN")
 
-    if ":" in component:
+    total_issues = result.get("total_issues", 0)
 
-        filename = component.split(":", 1)[1]
+    if quality_gate == "OK":
+
+        print("✅ VERDICT       : PASS")
 
     else:
 
-        filename = component
+        print("❌ VERDICT       : FAIL")
 
-    # --------------------------------------------------------
-    # Line number
-    # --------------------------------------------------------
+    print(f"🚦 Quality Gate  : {quality_gate}")
 
-    text_range = issue.get("textRange")
+    print(f"🔍 Issues        : {total_issues}")
 
-    line_number = None
+    if result.get("findings"):
 
-    if isinstance(text_range, dict):
+        print()
+        print("Findings:")
 
-        line_number = text_range.get("startLine")
+        for finding in result["findings"]:
 
-    # --------------------------------------------------------
-    # Basic issue information
-    # --------------------------------------------------------
+            print(f"  • {finding.get('filename')} " f"(line {finding.get('line')})")
 
-    rule_key = issue.get("rule", "unknown")
+            print(f"    {finding.get('error')}")
 
-    message = issue.get("message", "SonarCloud issue detected.")
+            print(f"    Severity: " f"{finding.get('severity')}")
 
-    severity = issue.get("severity", "UNKNOWN")
+    else:
 
-    issue_type = issue.get("type", "UNKNOWN")
+        print()
+        print("✅ No issues found.")
 
-    finding = {
-        "filename": filename,
-        "line": line_number,
-        "error": message,
-        "severity": severity,
-        "type": issue_type,
-    }
-
-    # --------------------------------------------------------
-    # Rule details
-    # --------------------------------------------------------
-
-    details = get_sonar_rule_details(rule_key, sonar_token, organization)
-
-    finding["rule_name"] = details["rule_name"]
-
-    finding["reason"] = details["reason"]
-
-    # --------------------------------------------------------
-    # Recommendation only when user wants details
-    # --------------------------------------------------------
-
-    if include_details:
-
-        finding["recommendation"] = details["recommendation"]
-
-    return finding
+    print()
+    print("=" * 70)
+    print()
 
 
-# ============================================================
-# GET PR-SPECIFIC ISSUES
-# ============================================================
+# ================================================================
+# MAIN SONARCLOUD SCAN
+# ================================================================
 
 
-def get_sonar_issues(
-    project_key, sonar_token, organization, pull_request, include_details
-):
+def run_sonarqube_scan(pr_url, include_details=True):
     """
-    Retrieve SonarCloud issues belonging specifically
-    to the Pull Request.
+    Run a universal SonarCloud PR analysis.
+
+    PR number, source branch, target branch,
+    repository and commit are obtained dynamically
+    from GitHub.
     """
 
-    headers = {"Authorization": f"Bearer {sonar_token}"}
+    if not SONAR_TOKEN:
 
-    issues = []
+        print("Error: SONAR_TOKEN is not configured.", file=sys.stderr)
 
-    page = 1
-    page_size = 100
-
-    while True:
-
-        params = {
-            "componentKeys": project_key,
-            "organization": organization,
-            "pullRequest": str(pull_request),
-            "resolved": "false",
-            "p": page,
-            "ps": page_size,
+        return {
+            "tool": "SonarCloud",
+            "status": "ERROR",
+            "message": "SONAR_TOKEN is missing.",
         }
 
-        response = requests.get(
-            f"{SONAR_URL}/api/issues/search", headers=headers, params=params, timeout=30
-        )
+    # ------------------------------------------------------------
+    # Fetch PR details
+    # ------------------------------------------------------------
 
-        if response.status_code != 200:
+    pr_details = github_client.fetch_pr_details(pr_url)
 
-            print("\nSonarCloud Issues API response:")
-            print(response.text)
-            print()
+    if not pr_details:
 
-            response.raise_for_status()
+        return {
+            "tool": "SonarCloud",
+            "status": "ERROR",
+            "message": "Unable to fetch GitHub PR details.",
+        }
 
-        data = response.json()
+    owner = pr_details["owner"]
+    repo = pr_details["repo"]
+    pull_number = pr_details["pull_number"]
+    head_branch = pr_details["head_branch"]
+    base_branch = pr_details["base_branch"]
+    head_sha = pr_details["head_sha"]
+    clone_url = pr_details["clone_url"]
 
-        current_issues = data.get("issues", [])
+    print(f"PR number: {pull_number}")
 
-        issues.extend(current_issues)
+    print(f"PR source branch: {head_branch}")
 
-        paging = data.get("paging", {})
+    print(f"PR target branch: {base_branch}")
 
-        total = paging.get("total", len(issues))
+    # ------------------------------------------------------------
+    # Find SonarScanner
+    # ------------------------------------------------------------
 
-        if len(issues) >= total:
-            break
+    scanner = find_sonar_scanner()
 
-        page += 1
+    if not scanner:
 
-    findings = []
+        return {
+            "tool": "SonarCloud",
+            "status": "ERROR",
+            "message": ("SonarScanner was not found. " "Configure SONAR_SCANNER_PATH."),
+        }
 
-    for issue in issues:
+    # ------------------------------------------------------------
+    # Temporary workspace
+    # ------------------------------------------------------------
 
-        finding = create_sonar_finding(
-            issue, sonar_token, organization, include_details
-        )
-
-        findings.append(finding)
-
-    return findings
-
-
-# ============================================================
-# MAIN SECURITY CHECK
-# ============================================================
-
-
-def run_sonar_security_check(pr_url, include_details):
-    """
-    Complete SonarCloud security check.
-    """
-
-    sonar_token = os.getenv("SONAR_TOKEN")
-
-    if not sonar_token:
-
-        return {"tool": "SonarCloud", "status": "ERROR", "error": SONAR_TOKEN_ERROR}
-
-    print("\n========================================")
-    print("        SONARCLOUD SECURITY SCAN")
-    print("========================================\n")
-
-    print("GitHub token loaded successfully")
-
-    workspace = None
+    temp_dir = tempfile.mkdtemp(prefix="release_portal_sonar_")
 
     try:
 
-        # ----------------------------------------------------
-        # SonarCloud project configuration
-        # ----------------------------------------------------
+        repo_dir = os.path.join(temp_dir, "repository")
 
-        organization = get_sonar_property("sonar.organization")
+        print("Cloning repository...")
 
-        project_key = get_sonar_property("sonar.projectKey")
+        clone_result = subprocess.run(
+            ["git", "clone", clone_url, repo_dir], capture_output=True, text=True
+        )
 
-        if not organization:
+        if clone_result.returncode != 0:
 
-            raise RuntimeError("sonar.organization is missing.")
+            print(clone_result.stderr, file=sys.stderr)
 
-        if not project_key:
+            return {
+                "tool": "SonarCloud",
+                "status": "ERROR",
+                "message": "Failed to clone repository.",
+            }
 
-            raise RuntimeError("sonar.projectKey is missing.")
+        # --------------------------------------------------------
+        # Checkout exact PR commit
+        # --------------------------------------------------------
 
-        # ----------------------------------------------------
-        # Prepare repository
-        # ----------------------------------------------------
+        print(f"Checking out PR commit: {head_sha}")
 
-        workspace, pr_details = prepare_pr_workspace(pr_url)
+        checkout_result = subprocess.run(
+            ["git", "checkout", head_sha], cwd=repo_dir, capture_output=True, text=True
+        )
 
-        # ----------------------------------------------------
-        # PR number
-        # ----------------------------------------------------
+        if checkout_result.returncode != 0:
 
-        pull_request = get_pr_number(pr_url, pr_details)
+            print(checkout_result.stderr, file=sys.stderr)
 
-        # ----------------------------------------------------
-        # Branch information
-        # ----------------------------------------------------
+            return {
+                "tool": "SonarCloud",
+                "status": "ERROR",
+                "message": "Failed to checkout PR commit.",
+            }
 
-        head_branch, base_branch = get_pr_branch_information(pr_details)
-
-        print(f"PR number: {pull_request}")
-
-        print(f"PR source branch: {head_branch}")
-
-        print(f"PR target branch: {base_branch}")
-
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # Run SonarScanner
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
-        scanner_output = run_sonar_scan(
-            workspace, sonar_token, pull_request, head_branch, base_branch
+        print("Running SonarCloud scan...")
+
+        scanner_command = [
+            scanner,
+            f"-Dsonar.token={SONAR_TOKEN}",
+            f"-Dsonar.organization=" f"{SONAR_ORGANIZATION}",
+            f"-Dsonar.projectKey=" f"{SONAR_PROJECT_KEY}",
+            f"-Dsonar.pullrequest.key=" f"{pull_number}",
+            f"-Dsonar.pullrequest.branch=" f"{head_branch}",
+            f"-Dsonar.pullrequest.base=" f"{base_branch}",
+        ]
+
+        scan_result = subprocess.run(
+            scanner_command, cwd=repo_dir, capture_output=True, text=True
         )
 
-        # ----------------------------------------------------
+        if scan_result.returncode != 0:
+
+            print(scan_result.stdout)
+
+            print(scan_result.stderr, file=sys.stderr)
+
+            return {
+                "tool": "SonarCloud",
+                "status": "ERROR",
+                "message": "SonarCloud scan failed.",
+            }
+
+        print("SonarCloud scan completed.")
+
+        # --------------------------------------------------------
+        # Extract CE task ID
+        # --------------------------------------------------------
+
+        task_id = None
+
+        for line in (scan_result.stdout + "\n" + scan_result.stderr).splitlines():
+
+            if "ceTaskId=" in line:
+
+                task_id = line.split("ceTaskId=")[1].strip()
+
+                break
+
+        if not task_id:
+
+            return {
+                "tool": "SonarCloud",
+                "status": "ERROR",
+                "message": ("SonarCloud task ID was not found."),
+            }
+
+        # --------------------------------------------------------
         # Wait for analysis
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
-        wait_for_sonar_analysis(scanner_output, sonar_token)
+        task = wait_for_analysis(task_id)
 
-        # ----------------------------------------------------
+        if not task:
+
+            return {
+                "tool": "SonarCloud",
+                "status": "ERROR",
+                "message": ("SonarCloud analysis did not complete."),
+            }
+
+        analysis_id = task.get("analysisId")
+
+        # --------------------------------------------------------
         # Quality Gate
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
-        quality_gate = get_quality_gate(
-            project_key, sonar_token, organization, pull_request
+        quality_data = sonar_request(
+            "/qualitygates/project_status", params={"pullRequest": pull_number}
         )
 
-        # ----------------------------------------------------
-        # PR-specific issues
-        # ----------------------------------------------------
+        if not quality_data:
 
-        findings = get_sonar_issues(
-            project_key, sonar_token, organization, pull_request, include_details
+            return {
+                "tool": "SonarCloud",
+                "status": "ERROR",
+                "message": ("Unable to retrieve SonarCloud " "quality gate."),
+            }
+
+        quality_gate = quality_data.get("projectStatus", {}).get("status", "UNKNOWN")
+
+        # --------------------------------------------------------
+        # Get PR issues
+        # --------------------------------------------------------
+
+        issues_data = sonar_request(
+            "/issues/search",
+            params={"pullRequest": pull_number, "resolved": "false", "ps": 500},
         )
 
-        # ----------------------------------------------------
+        if not issues_data:
+
+            issues = []
+
+        else:
+
+            issues = issues_data.get("issues", [])
+
+        # --------------------------------------------------------
+        # Build findings
+        # --------------------------------------------------------
+
+        findings = []
+
+        for issue in issues:
+
+            rule_key = issue.get("rule")
+
+            rule_details = get_rule_details(rule_key)
+
+            finding = {
+                "filename": issue.get("component"),
+                "line": issue.get("line"),
+                "error": issue.get("message"),
+                "severity": issue.get("severity"),
+                "type": issue.get("type"),
+                "rule_name": rule_details.get("rule_name"),
+            }
+
+            if include_details:
+
+                finding["reason"] = rule_details.get("reason")
+
+                finding["recommendation"] = rule_details.get("recommendation")
+
+            findings.append(finding)
+
+        # --------------------------------------------------------
         # Final result
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
-        return {
+        result = {
             "tool": "SonarCloud",
             "status": "SUCCESS",
             "quality_gate": quality_gate,
@@ -827,74 +675,62 @@ def run_sonar_security_check(pr_url, include_details):
             "findings": findings,
         }
 
-    except Exception as error:
+        # --------------------------------------------------------
+        # Human-readable output
+        # --------------------------------------------------------
 
-        return {"tool": "SonarCloud", "status": "ERROR", "error": str(error)}
+        if include_details:
+
+            display_detailed_findings(findings)
+
+        else:
+
+            display_summary(result)
+
+        # JSON result remains available to main.py/frontend
+        print(json.dumps(result, indent=2))
+
+        return result
 
     finally:
 
-        # ----------------------------------------------------
-        # Delete temporary workspace
-        # ----------------------------------------------------
+        # --------------------------------------------------------
+        # Remove temporary repository
+        # --------------------------------------------------------
 
-        if workspace and os.path.exists(workspace):
-
-            shutil.rmtree(workspace, ignore_errors=True)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# ============================================================
-# COMMAND LINE INTERFACE
-# ============================================================
+# ================================================================
+# CLI
+# ================================================================
 
 if __name__ == "__main__":
 
     if len(sys.argv) != 2:
 
-        print("Usage:")
-
-        print("python .\\src\\checks\\sonarqube.py " '"<GitHub Pull Request URL>"')
+        print("Usage: python .\\src\\checks\\sonarqube.py " "<GitHub Pull Request URL>")
 
         sys.exit(1)
 
     pr_url = sys.argv[1]
 
-    # --------------------------------------------------------
-    # Ask user whether detailed recommendations are needed
-    # --------------------------------------------------------
-
     while True:
 
         choice = (
             input(
-                "\nDo you have time to review detailed "
-                "SonarCloud reasons and recommendations? (y/n):"
+                "Do you have time to review detailed "
+                "SonarCloud reasons and recommendations? (y/n): "
             )
             .strip()
             .lower()
         )
 
         if choice in ("y", "n"):
-
             break
 
-        print("Please enter only 'y' or 'n'.")
+        print("Please enter either y or n.")
 
     include_details = choice == "y"
 
-    # --------------------------------------------------------
-    # Run scan
-    # --------------------------------------------------------
-
-    result = run_sonar_security_check(pr_url, include_details)
-
-    # --------------------------------------------------------
-    # Print result
-    # --------------------------------------------------------
-
-    print("\n========================================")
-
-    print("             FINAL RESULT")
-
-    print("========================================")
-
-    print(json.dumps(result, indent=2))
+    run_sonarqube_scan(pr_url, include_details=include_details)
