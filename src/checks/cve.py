@@ -1,196 +1,1067 @@
-import src.github_client as github_client
 import sys
-import requests
 import json
+import re
+import requests
+
+import src.github_client as github_client
 
 """
-https://github.com/himanidhawan4/release-portal-security-gate-test/pull/3
-python -m src.checks.cve https://github.com/himanidhawan4/release-portal-security-gate-test/pull/3
+CVE / OSV dependency vulnerability scanner.
 
+Usage:
+
+python -m src.checks.cve "https://github.com/OWNER/REPO/pull/NUMBER"
 """
+
+
+# ================================================================
+# SEVERITY
+# ================================================================
+
+SEVERITY_RANK = {
+    "CRITICAL": 4,
+    "HIGH": 3,
+    "MODERATE": 2,
+    "MEDIUM": 2,
+    "LOW": 1,
+    "UNKNOWN": 0,
+}
+
+
+def normalize_severity(severity):
+    """
+    Convert severity to one standard value.
+    """
+
+    if not severity:
+        return "UNKNOWN"
+
+    severity = str(severity).upper().strip()
+
+    if severity == "MEDIUM":
+        return "MODERATE"
+
+    if severity in ("CRITICAL", "HIGH", "MODERATE", "LOW"):
+        return severity
+
+    return "UNKNOWN"
+
+
+def highest_severity(current, new):
+    """
+    Return the highest severity between two values.
+    """
+
+    current = normalize_severity(current)
+    new = normalize_severity(new)
+
+    if SEVERITY_RANK[new] > SEVERITY_RANK[current]:
+        return new
+
+    return current
+
+
+# ================================================================
+# CVSS SEVERITY
+# ================================================================
+
+
+def cvss_to_severity(score):
+    """
+    Convert CVSS score into severity.
+
+    CVSS:
+        9.0 - 10.0  -> CRITICAL
+        7.0 - 8.9   -> HIGH
+        4.0 - 6.9   -> MODERATE
+        0.1 - 3.9   -> LOW
+        0           -> UNKNOWN
+    """
+
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        return "UNKNOWN"
+
+    if score >= 9.0:
+        return "CRITICAL"
+
+    if score >= 7.0:
+        return "HIGH"
+
+    if score >= 4.0:
+        return "MODERATE"
+
+    if score > 0:
+        return "LOW"
+
+    return "UNKNOWN"
+
+
+def get_osv_severity(vulnerability):
+    """
+    Get severity from OSV.
+
+    Priority:
+        1. database_specific.severity
+        2. CVSS score
+        3. UNKNOWN
+    """
+
+    database_specific = vulnerability.get(
+        "database_specific",
+        {},
+    )
+
+    severity = database_specific.get("severity")
+
+    if severity:
+        return normalize_severity(severity)
+
+    # ------------------------------------------------------------
+    # Try OSV severity array.
+    # ------------------------------------------------------------
+
+    severity_entries = vulnerability.get(
+        "severity",
+        [],
+    )
+
+    scores = []
+
+    if isinstance(severity_entries, list):
+
+        for entry in severity_entries:
+
+            if not isinstance(entry, dict):
+                continue
+
+            score = entry.get("score")
+
+            if not score:
+                continue
+
+            # ----------------------------------------------------
+            # Sometimes score is directly numeric.
+            # ----------------------------------------------------
+
+            try:
+
+                scores.append(float(score))
+                continue
+
+            except (TypeError, ValueError):
+                pass
+
+            # ----------------------------------------------------
+            # Sometimes score is a CVSS vector.
+            #
+            # We don't implement a complete CVSS calculator here.
+            # We leave it UNKNOWN rather than inventing a score.
+            # ----------------------------------------------------
+
+    if scores:
+
+        highest_score = max(scores)
+
+        return cvss_to_severity(highest_score)
+
+    return "UNKNOWN"
+
+
+# ================================================================
+# SHORT REASON
+# ================================================================
+
+
+def clean_text(text):
+    """
+    Clean whitespace and Markdown from advisory text.
+    """
+
+    if not text:
+        return ""
+
+    text = re.sub(r"#+\s*", "", text)
+    text = re.sub(r"\s+", " ", text)
+    text = text.strip()
+
+    return text
+
+
+def make_short_reason(vulnerability):
+    """
+    Return a short human-readable explanation.
+
+    We prefer OSV's summary because the details field can contain
+    a complete multi-paragraph security advisory.
+    """
+
+    summary = vulnerability.get("summary")
+
+    if summary:
+
+        summary = clean_text(summary)
+
+        if len(summary) > 300:
+            summary = summary[:297] + "..."
+
+        return summary
+
+    details = clean_text(vulnerability.get("details"))
+
+    if not details:
+        return "A known security vulnerability affects this dependency."
+
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        details,
+    )
+
+    reason = sentences[0].strip()
+
+    if len(reason) > 300:
+        reason = reason[:297] + "..."
+
+    return reason
+
+
+# ================================================================
+# FIXED VERSION
+# ================================================================
+
+
+def get_fixed_versions(vulnerability):
+    """
+    Extract patched versions reported by OSV.
+    """
+
+    fixed_versions = []
+
+    for affected in vulnerability.get(
+        "affected",
+        [],
+    ):
+
+        for range_data in affected.get(
+            "ranges",
+            [],
+        ):
+
+            for event in range_data.get(
+                "events",
+                [],
+            ):
+
+                fixed = event.get("fixed")
+
+                if fixed:
+                    fixed_versions.append(str(fixed))
+
+    return fixed_versions
+
+
+def make_solution(package, vulnerability):
+    """
+    Create a concise remediation recommendation.
+    """
+
+    fixed_versions = get_fixed_versions(vulnerability)
+
+    if fixed_versions:
+
+        return f"Upgrade {package} to " f"{fixed_versions[0]} or later."
+
+    return (
+        f"Upgrade {package} to a patched version "
+        f"recommended by the security advisory."
+    )
+
+
+# ================================================================
+# VULNERABILITY IDENTIFICATION
+# ================================================================
+
+
+def normalize_for_comparison(text):
+    """
+    Normalize text so slightly different GHSA/PYSEC descriptions
+    can be compared.
+    """
+
+    if not text:
+        return ""
+
+    text = text.lower()
+
+    # Remove Markdown.
+    text = re.sub(r"[`*_#]", "", text)
+
+    # Remove advisory prefixes.
+    text = re.sub(
+        r"^(django|flask|requests|urllib3|jinja2)\s*:\s*",
+        "",
+        text,
+    )
+
+    # Normalize whitespace.
+    text = re.sub(r"\s+", " ", text)
+
+    # Remove punctuation that doesn't help comparison.
+    text = re.sub(r"[^\w\s]", " ", text)
+
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+
+
+def get_vulnerability_key(vulnerability):
+    """
+    Generate a key for duplicate detection.
+
+    First preference:
+        aliases supplied by OSV.
+
+    Otherwise:
+        normalized summary.
+
+    Otherwise:
+        normalized first part of details.
+    """
+
+    aliases = vulnerability.get(
+        "aliases",
+        [],
+    )
+
+    if aliases:
+
+        # Prefer GHSA as the canonical identifier.
+        ghsa_aliases = [
+            alias for alias in aliases if str(alias).upper().startswith("GHSA-")
+        ]
+
+        if ghsa_aliases:
+            return (
+                "ALIAS:",
+                ghsa_aliases[0].upper(),
+            )
+
+        return (
+            "ALIAS:",
+            str(aliases[0]).upper(),
+        )
+
+    summary = normalize_for_comparison(vulnerability.get("summary"))
+
+    if summary:
+        return (
+            "SUMMARY:",
+            summary,
+        )
+
+    details = normalize_for_comparison(vulnerability.get("details"))
+
+    if details:
+        return (
+            "DETAILS:",
+            details[:500],
+        )
+
+    return (
+        "ID:",
+        vulnerability.get("id"),
+    )
+
+
+# ================================================================
+# ADVISORY PREFERENCE
+# ================================================================
+
+
+def advisory_priority(vulnerability):
+    """
+    Prefer advisories in this order:
+
+        GHSA
+        CVE
+        PYSEC
+        other
+    """
+
+    vuln_id = str(vulnerability.get("id", "")).upper()
+
+    if vuln_id.startswith("GHSA-"):
+        return 4
+
+    if vuln_id.startswith("CVE-"):
+        return 3
+
+    if vuln_id.startswith("PYSEC-"):
+        return 2
+
+    return 1
+
+
+def merge_vulnerability(existing, new):
+    """
+    Merge two records that represent the same vulnerability.
+
+    Keeps:
+        - best advisory ID
+        - highest severity
+        - best reason
+        - best recommendation
+    """
+
+    existing_severity = normalize_severity(existing.get("severity"))
+
+    new_severity = normalize_severity(new.get("severity"))
+
+    # ------------------------------------------------------------
+    # Select the preferred advisory ID.
+    # ------------------------------------------------------------
+
+    if advisory_priority(new) > advisory_priority(existing):
+
+        existing["id"] = new.get("id")
+
+        if new.get("summary"):
+            existing["summary"] = new.get("summary")
+
+    # ------------------------------------------------------------
+    # Keep highest severity.
+    # ------------------------------------------------------------
+
+    existing["severity"] = highest_severity(
+        existing_severity,
+        new_severity,
+    )
+
+    # ------------------------------------------------------------
+    # Prefer a useful summary.
+    # ------------------------------------------------------------
+
+    if not existing.get("summary") and new.get("summary"):
+
+        existing["summary"] = new.get("summary")
+
+    # ------------------------------------------------------------
+    # Prefer recommendation with a fixed version.
+    # ------------------------------------------------------------
+
+    existing_solution = existing.get(
+        "solution",
+        "",
+    )
+
+    new_solution = new.get(
+        "solution",
+        "",
+    )
+
+    if (
+        "patched version" in existing_solution.lower()
+        and "upgrade" in new_solution.lower()
+    ):
+
+        existing["solution"] = new_solution
+
+    return existing
+
+
+def deduplicate_vulnerabilities(vulnerabilities):
+    """
+    Remove duplicate GHSA/PYSEC records.
+    """
+
+    grouped = {}
+
+    for vulnerability in vulnerabilities:
+
+        key = get_vulnerability_key(vulnerability)
+
+        if key not in grouped:
+
+            grouped[key] = vulnerability
+
+        else:
+
+            grouped[key] = merge_vulnerability(
+                grouped[key],
+                vulnerability,
+            )
+
+    return list(grouped.values())
+
+
+# ================================================================
+# DEPENDENCY EXTRACTION
+# ================================================================
+
+DEPENDENCY_ECOSYSTEMS = {
+    "package.json": "npm",
+    "package-lock.json": "npm",
+    "npm-shrinkwrap.json": "npm",
+    "requirements.txt": "PyPI",
+    "pyproject.toml": "PyPI",
+    "pipfile": "PyPI",
+    "pipfile.lock": "PyPI",
+    "go.mod": "Go",
+    "go.sum": "Go",
+    "pom.xml": "Maven",
+    "build.gradle": "Maven",
+    "build.gradle.kts": "Maven",
+    "cargo.toml": "crates.io",
+    "cargo.lock": "crates.io",
+    "gemfile": "RubyGems",
+    "gemfile.lock": "RubyGems",
+    "composer.json": "Packagist",
+    # Current project's test dependency files.
+    "dependencies-nested.json": "PyPI",
+    "dependencies-simple.json": "PyPI",
+}
+
+
+def extract_dependencies(details):
+    """
+    Extract dependencies from added/changed PR lines.
+    """
+
+    result = []
+
+    for filename, patch in details["changed_files"]:
+
+        filename_lower = filename.lower()
+
+        if filename_lower not in DEPENDENCY_ECOSYSTEMS:
+            continue
+
+        # ========================================================
+        # requirements.txt
+        # ========================================================
+
+        if filename_lower.endswith(".txt"):
+
+            lines = patch.splitlines()
+
+            lineno = None
+
+            for line in lines:
+
+                if line.startswith("@@"):
+
+                    parts = line.split()
+
+                    for part in parts:
+
+                        if part.startswith("+"):
+
+                            start = part.split(",")[0]
+
+                            lineno = int(start[1:])
+
+                            break
+
+                    continue
+
+                if line.startswith(("---", "+++")):
+                    continue
+
+                if line.startswith("-"):
+                    continue
+
+                if line.startswith("+"):
+
+                    content = line[1:].strip()
+
+                    if content and not content.startswith("#"):
+
+                        for operator in (
+                            "==",
+                            ">=",
+                            "<=",
+                            "~=",
+                            ">",
+                            "<",
+                        ):
+
+                            if operator in content:
+
+                                package, version = content.split(
+                                    operator,
+                                    1,
+                                )
+
+                                package = package.strip()
+                                version = version.strip()
+
+                                if package and version:
+
+                                    result.append(
+                                        (
+                                            filename,
+                                            package,
+                                            version,
+                                            lineno,
+                                        )
+                                    )
+
+                                break
+
+                    if lineno is not None:
+                        lineno += 1
+
+                elif line.startswith(" "):
+
+                    if lineno is not None:
+                        lineno += 1
+
+            continue
+
+        # ========================================================
+        # JSON dependency files
+        # ========================================================
+
+        lines = patch.splitlines()
+
+        lineno = None
+        added_lines = []
+        dependency_lines = {}
+
+        for line in lines:
+
+            if line.startswith("@@"):
+
+                parts = line.split()
+
+                for part in parts:
+
+                    if part.startswith("+"):
+
+                        start = part.split(",")[0]
+
+                        lineno = int(start[1:])
+
+                        break
+
+                continue
+
+            if line.startswith(("---", "+++")):
+                continue
+
+            if line.startswith("-"):
+                continue
+
+            if line.startswith("+"):
+
+                content = line[1:].strip()
+
+                if lineno is not None:
+                    lineno += 1
+
+                added_lines.append(content)
+
+                match = re.match(
+                    r'^"([^"]+)"\s*:\s*(?:"([^"]+)"|\{)',
+                    content,
+                )
+
+                if match:
+
+                    package_name = match.group(1)
+
+                    dependency_lines[package_name] = lineno
+
+        json_text = "\n".join(added_lines)
+
+        try:
+
+            data = json.loads(json_text)
+
+        except json.JSONDecodeError:
+
+            continue
+
+        # ========================================================
+        # Nested JSON
+        # ========================================================
+
+        if isinstance(data, dict) and "dependencies" in data:
+
+            dependencies = data["dependencies"]
+
+            if isinstance(
+                dependencies,
+                dict,
+            ):
+
+                for package_name, package_details in dependencies.items():
+
+                    dependency_line = dependency_lines.get(package_name)
+
+                    if isinstance(
+                        package_details,
+                        dict,
+                    ):
+
+                        version = package_details.get("version")
+
+                    else:
+
+                        version = package_details
+
+                    if package_name and version:
+
+                        result.append(
+                            (
+                                filename,
+                                package_name,
+                                str(version),
+                                dependency_line,
+                            )
+                        )
+
+        # ========================================================
+        # Simple JSON
+        # ========================================================
+
+        elif isinstance(data, dict):
+
+            for package_name, version in data.items():
+
+                if package_name in dependency_lines:
+
+                    result.append(
+                        (
+                            filename,
+                            package_name,
+                            str(version),
+                            dependency_lines[package_name],
+                        )
+                    )
+
+    return result
+
+
+# ================================================================
+# OSV API
+# ================================================================
+
+
+def query_osv(
+    package,
+    ecosystem,
+    version,
+):
+    """
+    Query OSV for a package/version.
+    """
+
+    payload = {
+        "package": {
+            "name": package,
+            "ecosystem": ecosystem,
+        },
+        "version": version,
+    }
+
+    try:
+
+        response = requests.post(
+            "https://api.osv.dev/v1/query",
+            json=payload,
+            timeout=20,
+        )
+
+        response.raise_for_status()
+
+        return response.json()
+
+    except requests.RequestException as error:
+
+        print(
+            f"Warning: OSV query failed for " f"{package} {version}: {error}",
+            file=sys.stderr,
+        )
+
+        return {}
+
+
+# ================================================================
+# MAIN CVE CHECK
+# ================================================================
 
 
 def check_vulnerabilities(pr_url):
+    """
+    Scan PR dependency changes against OSV.
+    """
+
     details = github_client.fetch_pr_details(pr_url)
-    result = []
-    vulnerabilities = []
-    dependency_ecosystems = {
-        "package.json": "npm",
-        "package-lock.json": "npm",
-        "npm-shrinkwrap.json": "npm",
-        "requirements.txt": "PyPI",
-        "pyproject.toml": "PyPI",
-        "pipfile": "PyPI",
-        "pipfile.lock": "PyPI",
-        "go.mod": "Go",
-        "go.sum": "Go",
-        "pom.xml": "Maven",
-        "build.gradle": "Maven",
-        "build.gradle.kts": "Maven",
-        "cargo.toml": "crates.io",
-        "cargo.lock": "crates.io",
-        "gemfile": "RubyGems",
-        "gemfile.lock": "RubyGems",
-        "composer.json": "Packagist",
-        # Test files in your current repository
-        "dependencies-nested.json": "PyPI",
-        "dependencies-simple.json": "PyPI",
-    }
 
     if not details:
         return []
 
-    for file, patchs in details["changed_files"]:
-        filename = file
-        patch = patchs
-        lineno = None
-        # ------------------------FILE SCANING BEGINS HERE----------------------------------------------------------------------------------------------
-        if filename.lower() in dependency_ecosystems:
-            if filename.lower().endswith(".txt"):
-                patch = patch.splitlines()
-                for line in patch:
+    dependencies = extract_dependencies(details)
 
-                    if line.startswith("@@"):
-                        line = line.split(" ")
-                        for i in line:
-                            if i.startswith("+"):
-                                i = i.split(",")
-                                lineno = int(i[0][1:])
+    print("\n===== CVE / OSV SCAN =====")
 
-                        continue
-                    elif line.startswith(("---", "+++")):
-                        continue
-                    elif line.startswith(("-")):
-                        continue
-                    elif line.startswith("+"):
-                        line = line[1:]
-                        if line and not line.startswith("#"):
-                            for i in ("==", ">=", "<=", "~=", ">", "<"):
-                                if i in line:
-                                    line = line.split(i)
-                                    name = line[0]
-                                    version = line[1]
-                                    result.append((filename, name, version, lineno))
-                                    break
+    print(f"Dependencies detected: " f"{len(dependencies)}")
 
-                        lineno += 1
+    if not dependencies:
 
-                    elif line.startswith(" "):
-                        lineno += 1
-            else:
-                patch = patch.splitlines()
-                lineno = None
-                searching_era = []
-                findings = []
-                dependency_lines = {}
-                for line in patch:
-                    if line.startswith("@@"):
-                        line = line.split(" ")
-                        for i in line:
-                            if i.startswith("+"):
-                                i = i.split(",")
-                                lineno = int(i[0][1:])
-                    elif line.startswith(("+++", "---")):
-                        continue
-                    elif line.startswith(("-")):
-                        continue
-                    elif line.startswith("+"):
-                        line = line[1:].strip()
-                        lineno += 1
-                        searching_era.append(line)
+        print("No dependency changes found.")
 
-                        if line.endswith('": {') or '": "' in line:
-                            name = line.split('"')[1]
-                            dependency_lines[name] = lineno
-                json_text = "\n".join(searching_era)
-                try:
-                    data = json.loads(json_text)
-                except json.JSONDecodeError:
-                    continue
-                if "dependencies" in data:
-                    dependencies = data["dependencies"]
+        print("Result: ALLOW")
 
-                    for name, details in dependencies.items():
-                        lineno = dependency_lines.get(name)
+        return []
 
-                        if isinstance(details, dict):
-                            version = details["version"]
-                        else:
-                            version = details
+    # ------------------------------------------------------------
+    # Query each dependency.
+    # ------------------------------------------------------------
 
-                        findings.append((filename, name, version, lineno))
+    raw_vulnerabilities = []
 
-                else:
-                    for name, version in data.items():
-                        if name in dependency_lines:
-                            findings.append(
-                                (filename, name, version, dependency_lines[name])
-                            )
-                result.extend(findings)
-    print("FINAL RESULT:", result)
-    osv_results = []
+    for (
+        filename,
+        package,
+        version,
+        lineno,
+    ) in dependencies:
 
-    for filename, name, version, lineno in result:
-        filename_lower = filename.lower()
-        ecosystem = dependency_ecosystems.get(filename_lower)
+        ecosystem = DEPENDENCY_ECOSYSTEMS.get(filename.lower())
 
-        if ecosystem is None:
+        if not ecosystem:
             continue
 
-        data = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
-        response = requests.post("https://api.osv.dev/v1/query", json=data)
-        response_data = response.json()
-        for vuln in response_data.get("vulns", []):
-            fixed_versions = []
+        response_data = query_osv(
+            package,
+            ecosystem,
+            version,
+        )
 
-            for affected in vuln.get("affected", []):
-                for range_data in affected.get("ranges", []):
-                    for event in range_data.get("events", []):
-                        if event.get("fixed"):
-                            fixed_versions.append(event["fixed"])
-            solution_text = (
-                f"Upgrade {name} to version {fixed_versions[0]} or later."
-                if fixed_versions
-                else f"Review security advisory for {name}."
-            )
+        for vulnerability in response_data.get(
+            "vulns",
+            [],
+        ):
 
-            vulnerabilities.append(
-                {
-                    "id": vuln.get("id"),
-                    "summary": vuln.get("summary"),
-                    "severity": vuln.get("database_specific", {}).get("severity"),
-                    "reason": vuln.get("details") or vuln.get("summary"),
-                    "solution": solution_text,
-                }
-            )
-
-        osv_results.append(
-            {
+            vulnerability_record = {
                 "filename": filename,
-                "package": name,
+                "package": package,
                 "version": version,
                 "line": lineno,
+                "id": vulnerability.get("id"),
+                "aliases": vulnerability.get(
+                    "aliases",
+                    [],
+                ),
+                "summary": vulnerability.get("summary"),
+                "severity": get_osv_severity(vulnerability),
+                "reason": make_short_reason(vulnerability),
+                "solution": make_solution(
+                    package,
+                    vulnerability,
+                ),
             }
+
+            if vulnerability_record["id"]:
+
+                raw_vulnerabilities.append(vulnerability_record)
+
+    # ------------------------------------------------------------
+    # Deduplicate by package + vulnerability.
+    # ------------------------------------------------------------
+
+    package_groups = {}
+
+    for finding in raw_vulnerabilities:
+
+        # Prefer OSV aliases when available.
+        aliases = finding.get(
+            "aliases",
+            [],
         )
-    while True:
-        choice = input("Do you want to see solution and reasons for your verdict ??")
-        if choice.lower() == "y":
-            for i in vulnerabilities:
-                print(json.dumps(i, indent=2))
-            break
 
-        elif choice.lower() == "n":
-            for i in osv_results:
-                print(json.dumps(i, indent=2))
-            break
+        ghsa_aliases = [
+            alias for alias in aliases if str(alias).upper().startswith("GHSA-")
+        ]
+
+        if ghsa_aliases:
+
+            vulnerability_identity = ghsa_aliases[0].upper()
+
         else:
-            print("Choose either y or n")
-            continue
 
+            vulnerability_identity = finding["id"].upper()
+
+        key = (
+            finding["package"].lower(),
+            vulnerability_identity,
+        )
+
+        if key not in package_groups:
+
+            package_groups[key] = finding
+
+        else:
+
+            existing = package_groups[key]
+
+            # Keep the preferred advisory.
+            if advisory_priority(finding) > advisory_priority(existing):
+
+                existing["id"] = finding["id"]
+
+            # Keep highest severity.
+            existing["severity"] = highest_severity(
+                existing["severity"],
+                finding["severity"],
+            )
+
+            # Keep useful summary.
+            if not existing.get("summary") and finding.get("summary"):
+
+                existing["summary"] = finding["summary"]
+
+    vulnerabilities = list(package_groups.values())
+
+    # ============================================================
+    # FINAL RESULT
+    # ============================================================
+
+    highest = "UNKNOWN"
+
+    for finding in vulnerabilities:
+
+        highest = highest_severity(
+            highest,
+            finding["severity"],
+        )
+
+    if vulnerabilities:
+        verdict = "BLOCK"
+    else:
+        verdict = "ALLOW"
+
+    print("\n===== CVE / OSV SCAN SUMMARY =====")
+
+    print(f"Dependencies checked: " f"{len(dependencies)}")
+
+    print(f"Unique vulnerabilities found: " f"{len(vulnerabilities)}")
+
+    print(f"Highest severity: {highest}")
+
+    print(f"Result: {verdict}")
+
+    # ============================================================
+    # USER DETAIL CHOICE
+    # ============================================================
+
+    while True:
+
+        choice = (
+            input(
+                "\nDo you want to see detailed " "reasons and recommendations? (y/n): "
+            )
+            .strip()
+            .lower()
+        )
+
+        if choice in ("y", "n"):
+            break
+
+        print("Please choose either y or n.")
+
+    # ============================================================
+    # DETAILED OUTPUT
+    # ============================================================
+
+    if choice == "y":
+
+        print("\n===== VULNERABILITY DETAILS =====")
+
+        if not vulnerabilities:
+
+            print("No vulnerabilities found.")
+
+        else:
+
+            for index, finding in enumerate(
+                vulnerabilities,
+                start=1,
+            ):
+
+                print(f"\n[{index}] " f"{finding['package']} " f"{finding['version']}")
+
+                print(f"File: " f"{finding['filename']}")
+
+                if finding["line"] is not None:
+
+                    print(f"Line: " f"{finding['line']}")
+
+                print(f"Severity: " f"{finding['severity']}")
+
+                print(f"ID: " f"{finding['id']}")
+
+                if finding.get("summary"):
+
+                    print(f"Vulnerability: " f"{finding['summary']}")
+
+                print(f"Reason: " f"{finding['reason']}")
+
+                print(f"Recommendation: " f"{finding['solution']}")
+
+    # ============================================================
+    # SHORT OUTPUT
+    # ============================================================
+
+    else:
+
+        print("\n===== VULNERABILITY SUMMARY =====")
+
+        if not vulnerabilities:
+
+            print("No vulnerabilities found.")
+
+        else:
+
+            for index, finding in enumerate(
+                vulnerabilities,
+                start=1,
+            ):
+
+                print(
+                    f"{index}. "
+                    f"{finding['package']} "
+                    f"{finding['version']} - "
+                    f"{finding['severity']} - "
+                    f"{finding['id']}"
+                )
+
+                if finding.get("summary"):
+
+                    print(f"   {finding['summary']}")
+
+    # ============================================================
+    # RETURN TO main.py
+    # ============================================================
+
+    return vulnerabilities
+
+
+# ================================================================
+# DIRECT EXECUTION
+# ================================================================
 
 if __name__ == "__main__":
+
     if len(sys.argv) != 2:
-        print("Usage: python github_client.py <GitHub Pull Request URL>")
+
+        print("Usage: " "python -m src.checks.cve " "<GitHub Pull Request URL>")
+
         sys.exit(1)
+
     pr_url = sys.argv[1]
-    pr_details = check_vulnerabilities(pr_url)
+
+    check_vulnerabilities(pr_url)

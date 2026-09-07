@@ -240,15 +240,13 @@ def check_secrets_in_pr(pr_url):
     ):
 
         data = github_client.fetch_pr_details(pr_url)
-        
+
         if not data:
             return []
 
         for file, patchs in data["changed_files"]:
             filename = file
             patch = patchs.splitlines()
-
-            print("------------------")
 
             for line in patch:
 
@@ -260,7 +258,6 @@ def check_secrets_in_pr(pr_url):
                             i = i.split(",")
                             lineno = int(i[0][1:])
 
-                    print(lineno)
                     continue
 
                 elif line.startswith(("+++", "---")):
@@ -355,9 +352,11 @@ def check_secrets_in_pr(pr_url):
         return verdict
 
 
+"""
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         pr_url = sys.argv[1]
         result = check_secrets_in_pr(pr_url)
     else:
         print("Usage: python <script> <GitHub PR URL>")
+"""

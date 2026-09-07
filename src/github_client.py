@@ -227,7 +227,7 @@ def fetch_pr_details(pr_url):
 # -------------------------------------------------------------
 # Standalone testing
 # -------------------------------------------------------------
-
+"""
 if __name__ == "__main__":
 
     if len(sys.argv) != 2:
@@ -260,3 +260,4 @@ if __name__ == "__main__":
     for filename, patch in pr_details["changed_files"]:
 
         print(f"Filename: {filename}\n" f"Patch:\n{patch}\n" f"{'-' * 40}")
+"""

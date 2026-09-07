@@ -188,7 +188,7 @@ def check_wildcards(pr_url):
                     lineno += 1
 
     print("\n===== IAM WILDCARD SCAN SUMMARY =====")
-    print(f"Files checked: {len(details)}")
+    print(f"Files checked: {len(details['changed_files'])}")
     print(f"Wildcard findings: {len(findings)}")
 
     if findings:
@@ -203,5 +203,8 @@ def check_wildcards(pr_url):
     return findings
 
 
+"""
+
 if __name__ == "__main__":
     check_wildcards(sys.argv[1])
+"""
