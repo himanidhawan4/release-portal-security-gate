@@ -4,11 +4,33 @@ from detect_secrets.settings import transient_settings
 from detect_secrets.core import scan
 import json
 
-# python -m detect_secrets scan --list-all-plugins
-# python -m src.checks.secrets https://github.com/himanidhawan4/release-portal-security-gate-test/pull/1
+
+# =========================================================
+# SECRET SCANNER
+# =========================================================
+#
+# This function can be used in two modes:
+#
+# include_details=False
+#     -> Returns the final verdict without detailed
+#        importance/recommendation information.
+#
+# include_details=True
+#     -> Returns the final verdict with importance and
+#        recommended action.
+#
+# IMPORTANT:
+# There is NO input() here.
+# This allows the function to work with Flask/web UI.
+#
+# =========================================================
 
 
-def check_secrets_in_pr(pr_url):
+def check_secrets_in_pr(pr_url, include_details=False):
+
+    # =====================================================
+    # IMPORTANCE / SECURITY EXPLANATIONS
+    # =====================================================
 
     importance = {
         "Artifactory Credentials": (
@@ -19,6 +41,7 @@ def check_secrets_in_pr(pr_url):
             "packages. This can create both data exposure and software supply-chain "
             "risks, making the credentials a serious security concern."
         ),
+
         "AWS Access Key": (
             "Exposed AWS credentials can allow unauthorized access to AWS resources "
             "and services within the permissions assigned to the credentials. "
@@ -27,6 +50,7 @@ def check_secrets_in_pr(pr_url):
             "generate unexpected cloud costs. A compromised AWS credential should "
             "be treated as exposed and revoked or rotated immediately."
         ),
+
         "Azure Storage Key": (
             "An exposed Azure Storage key can provide access to an Azure Storage "
             "account and the operations permitted by that key. Depending on the "
@@ -35,6 +59,7 @@ def check_secrets_in_pr(pr_url):
             "resources, a compromised key should be considered exposed and rotated "
             "immediately."
         ),
+
         "Basic Auth Credentials": (
             "Exposed Basic Authentication credentials can allow an attacker to "
             "authenticate directly to a protected service using the discovered "
@@ -43,6 +68,7 @@ def check_secrets_in_pr(pr_url):
             "the account as a starting point for further attacks. The credentials "
             "should therefore be changed or revoked immediately."
         ),
+
         "Cloudant Credentials": (
             "Exposed Cloudant credentials can provide unauthorized access to "
             "Cloudant databases and application data. Depending on the assigned "
@@ -50,6 +76,7 @@ def check_secrets_in_pr(pr_url):
             "database records. This can result in sensitive data exposure, data "
             "manipulation, or disruption of applications relying on the database."
         ),
+
         "Discord Bot Token": (
             "An exposed Discord bot token can allow an attacker to take control "
             "of the associated bot. Depending on the bot's permissions, the "
@@ -57,6 +84,7 @@ def check_secrets_in_pr(pr_url):
             "Discord resources available to the bot. The token should be treated "
             "as compromised and regenerated immediately."
         ),
+
         "GitHub Token": (
             "An exposed GitHub token can allow unauthorized access to GitHub "
             "resources according to the permissions assigned to that token. "
@@ -65,6 +93,7 @@ def check_secrets_in_pr(pr_url):
             "operations. The token should be revoked immediately and replaced "
             "with a securely managed credential if continued access is required."
         ),
+
         "GitLab Token": (
             "An exposed GitLab token can allow unauthorized access to GitLab "
             "resources and API operations permitted by the token. Depending on "
@@ -72,6 +101,7 @@ def check_secrets_in_pr(pr_url):
             "code, CI/CD resources, or perform unauthorized repository operations. "
             "The token should be revoked immediately and replaced if necessary."
         ),
+
         "IBM Cloud IAM Token": (
             "An exposed IBM Cloud IAM token can provide unauthorized access to "
             "IBM Cloud resources according to the permissions assigned to the "
@@ -80,6 +110,7 @@ def check_secrets_in_pr(pr_url):
             "be revoked or rotated immediately to prevent unauthorized cloud "
             "activity."
         ),
+
         "IBM COS HMAC Credentials": (
             "Exposed IBM Cloud Object Storage HMAC credentials can allow unauthorized "
             "access to object-storage operations associated with the credentials. "
@@ -87,6 +118,7 @@ def check_secrets_in_pr(pr_url):
             "modify, or delete stored objects. These credentials should be treated "
             "as compromised and rotated immediately."
         ),
+
         "IP Address": (
             "An exposed public IP address is not necessarily a credential or direct "
             "authentication secret, but it can reveal information about application "
@@ -95,6 +127,7 @@ def check_secrets_in_pr(pr_url):
             "actual security impact depends on which services are reachable and "
             "how the infrastructure is secured."
         ),
+
         "JWT": (
             "An exposed JWT may allow an attacker to impersonate the identity "
             "represented by the token while it remains valid. The attacker could "
@@ -103,6 +136,7 @@ def check_secrets_in_pr(pr_url):
             "session should be invalidated where possible and a new token should "
             "be issued."
         ),
+
         "Secret Keyword": (
             "A Secret Keyword finding indicates that a line contains terminology "
             "commonly associated with sensitive information such as passwords, "
@@ -112,6 +146,7 @@ def check_secrets_in_pr(pr_url):
             "reviewed carefully and, if it is a real credential, removed and "
             "rotated or revoked."
         ),
+
         "Mailchimp API Key": (
             "An exposed Mailchimp API key can provide unauthorized access to "
             "Mailchimp resources according to the permissions associated with "
@@ -120,6 +155,7 @@ def check_secrets_in_pr(pr_url):
             "compromised key should be revoked and replaced to prevent further "
             "unauthorized API activity."
         ),
+
         "NPM Token": (
             "An exposed NPM token can allow unauthorized access to NPM operations "
             "permitted by the token. If the token has publishing permissions, "
@@ -128,6 +164,7 @@ def check_secrets_in_pr(pr_url):
             "significant software supply-chain risk, so the token should be "
             "revoked immediately."
         ),
+
         "OpenAI API Key": (
             "An exposed OpenAI API key can allow unauthorized parties to consume "
             "API services using the associated account. This may result in "
@@ -136,6 +173,7 @@ def check_secrets_in_pr(pr_url):
             "replaced with a securely managed credential if continued access "
             "is required."
         ),
+
         "Private Key": (
             "An exposed private key can allow an attacker to impersonate the "
             "identity associated with that key or authenticate to systems that "
@@ -144,6 +182,7 @@ def check_secrets_in_pr(pr_url):
             "A private key should be considered compromised once exposed and "
             "should be replaced immediately."
         ),
+
         "PyPI Token": (
             "An exposed PyPI token can allow unauthorized package publishing "
             "using the permissions associated with the token. An attacker could "
@@ -152,6 +191,7 @@ def check_secrets_in_pr(pr_url):
             "supply-chain risk, so the token should be revoked and replaced "
             "immediately."
         ),
+
         "SendGrid API Key": (
             "An exposed SendGrid API key can allow unauthorized use of email "
             "and other SendGrid services permitted by the key. An attacker "
@@ -159,6 +199,7 @@ def check_secrets_in_pr(pr_url):
             "or access available resources. The key should be revoked immediately "
             "and replaced with a securely managed credential."
         ),
+
         "Slack Token": (
             "An exposed Slack token can allow unauthorized access to Slack "
             "resources according to the permissions assigned to the token. "
@@ -166,6 +207,7 @@ def check_secrets_in_pr(pr_url):
             "files, or perform actions on behalf of the associated application "
             "or user. The token should be revoked immediately."
         ),
+
         "SoftLayer Credentials": (
             "Exposed SoftLayer credentials can provide unauthorized access to "
             "cloud infrastructure and associated resources. Depending on the "
@@ -173,6 +215,7 @@ def check_secrets_in_pr(pr_url):
             "systems, modify infrastructure, or retrieve sensitive information. "
             "The credentials should be revoked or rotated immediately."
         ),
+
         "Square OAuth Token": (
             "An exposed Square OAuth token can provide unauthorized access to "
             "Square resources and operations permitted by the token. Depending "
@@ -180,6 +223,7 @@ def check_secrets_in_pr(pr_url):
             "or allow unauthorized account operations. The token should be revoked "
             "immediately to prevent continued unauthorized access."
         ),
+
         "Stripe API Key": (
             "An exposed Stripe API key can allow unauthorized access to Stripe "
             "resources and operations permitted by the key. Depending on its "
@@ -188,6 +232,7 @@ def check_secrets_in_pr(pr_url):
             "should be revoked immediately and replaced with a securely managed "
             "credential."
         ),
+
         "Telegram Bot Token": (
             "An exposed Telegram bot token can allow an attacker to take control "
             "of the associated bot. The attacker may be able to send messages, "
@@ -195,6 +240,7 @@ def check_secrets_in_pr(pr_url):
             "to the bot. The token should be regenerated immediately so the "
             "compromised token can no longer be used."
         ),
+
         "Twilio API Key": (
             "An exposed Twilio API key can allow unauthorized use of Twilio "
             "services and resources permitted by the key. Depending on the "
@@ -205,7 +251,15 @@ def check_secrets_in_pr(pr_url):
         ),
     }
 
+    # =====================================================
+    # RESULT STORAGE
+    # =====================================================
+
     result = []
+
+    # =====================================================
+    # DETECT-SECRETS PLUGINS
+    # =====================================================
 
     with transient_settings(
         {
@@ -239,52 +293,107 @@ def check_secrets_in_pr(pr_url):
         }
     ):
 
+        # =================================================
+        # FETCH PR DETAILS
+        # =================================================
+
         data = github_client.fetch_pr_details(pr_url)
 
         if not data:
             return []
 
+        # =================================================
+        # EXTRACT ADDED LINES FROM PR
+        # =================================================
+
         for file, patchs in data["changed_files"]:
+
             filename = file
             patch = patchs.splitlines()
 
+            lineno = 0
+
             for line in patch:
 
-                if line.startswith("@@"):
-                    line = line.split(" ")
+                # -----------------------------------------
+                # Git diff hunk header
+                # -----------------------------------------
 
-                    for i in line:
-                        if i.startswith("+"):
-                            i = i.split(",")
-                            lineno = int(i[0][1:])
+                if line.startswith("@@"):
+
+                    parts = line.split(" ")
+
+                    for item in parts:
+
+                        if item.startswith("+"):
+
+                            item = item.split(",")
+
+                            try:
+                                lineno = int(item[0][1:])
+                            except ValueError:
+                                lineno = 0
 
                     continue
+
+                # -----------------------------------------
+                # Ignore file headers
+                # -----------------------------------------
 
                 elif line.startswith(("+++", "---")):
+
                     continue
+
+                # -----------------------------------------
+                # Removed lines
+                # -----------------------------------------
 
                 elif line.startswith("-"):
+
                     continue
+
+                # -----------------------------------------
+                # Context lines
+                # -----------------------------------------
 
                 elif line.startswith(" "):
+
                     lineno += 1
                     continue
 
+                # -----------------------------------------
+                # Added lines
+                # -----------------------------------------
+
                 elif line.startswith("+"):
-                    line = line[1:]
-                    result.append((filename, line, lineno))
+
+                    added_line = line[1:]
+
+                    result.append(
+                        (
+                            filename,
+                            added_line,
+                            lineno,
+                        )
+                    )
+
                     lineno += 1
 
-        # Collect all detected secrets first.
+        # =================================================
+        # SCAN ADDED LINES
+        # =================================================
+
         findings_result = []
 
         for filename, line, lineno in result:
+
             findings = scan.scan_line(line)
 
             if not findings:
                 continue
 
             for finding in findings:
+
                 findings_result.append(
                     {
                         "FileName": filename,
@@ -293,25 +402,19 @@ def check_secrets_in_pr(pr_url):
                     }
                 )
 
-        # If nothing was detected, finish immediately.
+        # =================================================
+        # NO SECRETS FOUND
+        # =================================================
+
         if not findings_result:
+
             print("\nNo secrets detected.")
+
             return []
 
-        # Ask only once for additional information.
-        print(
-            "\nDo you want importance and recommendations "
-            "along with the final verdict? (y/n): ",
-            end="",
-        )
-
-        while True:
-            need = input().strip().lower()
-
-            if need == "y" or need == "n":
-                break
-
-            print("Invalid input. Please enter 'y' or 'n': ", end="")
+        # =================================================
+        # BUILD FINAL VERDICT
+        # =================================================
 
         verdict = []
 
@@ -325,7 +428,12 @@ def check_secrets_in_pr(pr_url):
                 "Verdict": "Block",
             }
 
-            if need == "y":
+            # ---------------------------------------------
+            # INCLUDE DETAILS ONLY IF REQUESTED
+            # ---------------------------------------------
+
+            if include_details:
+
                 verdict_item["Importance"] = importance.get(
                     finding["Type"],
                     (
@@ -345,18 +453,60 @@ def check_secrets_in_pr(pr_url):
 
             verdict.append(verdict_item)
 
+        # =================================================
+        # DISPLAY RESULT
+        # =================================================
+
         print("\nFinal Verdict")
         print("=============")
-        print(json.dumps(verdict, indent=2))
+
+        print(
+            json.dumps(
+                verdict,
+                indent=2,
+            )
+        )
 
         return verdict
 
 
+# =========================================================
+# COMMAND-LINE ENTRY POINT
+# =========================================================
+#
+# This section is intentionally kept commented out.
+#
+# The scanner is now designed to be called by:
+#
+#     src.main
+#
+# or:
+#
+#     Flask
+#
+# This prevents interactive input() from interfering
+# with the web application.
+#
+# =========================================================
+
+
 """
 if __name__ == "__main__":
+
     if len(sys.argv) > 1:
+
         pr_url = sys.argv[1]
-        result = check_secrets_in_pr(pr_url)
+
+        result = check_secrets_in_pr(
+            pr_url,
+            include_details=True,
+        )
+
     else:
-        print("Usage: python <script> <GitHub PR URL>")
+
+        print(
+            "Usage: "
+            "python -m src.checks.secrets "
+            "<GitHub PR URL>"
+        )
 """

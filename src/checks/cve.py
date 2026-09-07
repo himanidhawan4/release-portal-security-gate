@@ -29,9 +29,7 @@ SEVERITY_RANK = {
 
 
 def normalize_severity(severity):
-    """
-    Convert severity to one standard value.
-    """
+    """Convert severity to one standard value."""
 
     if not severity:
         return "UNKNOWN"
@@ -48,9 +46,7 @@ def normalize_severity(severity):
 
 
 def highest_severity(current, new):
-    """
-    Return the highest severity between two values.
-    """
+    """Return the highest severity between two values."""
 
     current = normalize_severity(current)
     new = normalize_severity(new)
@@ -67,16 +63,7 @@ def highest_severity(current, new):
 
 
 def cvss_to_severity(score):
-    """
-    Convert CVSS score into severity.
-
-    CVSS:
-        9.0 - 10.0  -> CRITICAL
-        7.0 - 8.9   -> HIGH
-        4.0 - 6.9   -> MODERATE
-        0.1 - 3.9   -> LOW
-        0           -> UNKNOWN
-    """
+    """Convert CVSS score into severity."""
 
     try:
         score = float(score)
@@ -118,10 +105,6 @@ def get_osv_severity(vulnerability):
     if severity:
         return normalize_severity(severity)
 
-    # ------------------------------------------------------------
-    # Try OSV severity array.
-    # ------------------------------------------------------------
-
     severity_entries = vulnerability.get(
         "severity",
         [],
@@ -141,24 +124,12 @@ def get_osv_severity(vulnerability):
             if not score:
                 continue
 
-            # ----------------------------------------------------
-            # Sometimes score is directly numeric.
-            # ----------------------------------------------------
-
             try:
-
                 scores.append(float(score))
                 continue
 
             except (TypeError, ValueError):
                 pass
-
-            # ----------------------------------------------------
-            # Sometimes score is a CVSS vector.
-            #
-            # We don't implement a complete CVSS calculator here.
-            # We leave it UNKNOWN rather than inventing a score.
-            # ----------------------------------------------------
 
     if scores:
 
@@ -175,9 +146,7 @@ def get_osv_severity(vulnerability):
 
 
 def clean_text(text):
-    """
-    Clean whitespace and Markdown from advisory text.
-    """
+    """Clean whitespace and Markdown from advisory text."""
 
     if not text:
         return ""
@@ -190,12 +159,7 @@ def clean_text(text):
 
 
 def make_short_reason(vulnerability):
-    """
-    Return a short human-readable explanation.
-
-    We prefer OSV's summary because the details field can contain
-    a complete multi-paragraph security advisory.
-    """
+    """Return a short human-readable explanation."""
 
     summary = vulnerability.get("summary")
 
@@ -232,9 +196,7 @@ def make_short_reason(vulnerability):
 
 
 def get_fixed_versions(vulnerability):
-    """
-    Extract patched versions reported by OSV.
-    """
+    """Extract patched versions reported by OSV."""
 
     fixed_versions = []
 
@@ -262,15 +224,13 @@ def get_fixed_versions(vulnerability):
 
 
 def make_solution(package, vulnerability):
-    """
-    Create a concise remediation recommendation.
-    """
+    """Create a concise remediation recommendation."""
 
     fixed_versions = get_fixed_versions(vulnerability)
 
     if fixed_versions:
 
-        return f"Upgrade {package} to " f"{fixed_versions[0]} or later."
+        return f"Upgrade {package} to {fixed_versions[0]} or later."
 
     return (
         f"Upgrade {package} to a patched version "
@@ -284,30 +244,23 @@ def make_solution(package, vulnerability):
 
 
 def normalize_for_comparison(text):
-    """
-    Normalize text so slightly different GHSA/PYSEC descriptions
-    can be compared.
-    """
+    """Normalize text so similar advisory descriptions can be compared."""
 
     if not text:
         return ""
 
     text = text.lower()
 
-    # Remove Markdown.
     text = re.sub(r"[`*_#]", "", text)
 
-    # Remove advisory prefixes.
     text = re.sub(
         r"^(django|flask|requests|urllib3|jinja2)\s*:\s*",
         "",
         text,
     )
 
-    # Normalize whitespace.
     text = re.sub(r"\s+", " ", text)
 
-    # Remove punctuation that doesn't help comparison.
     text = re.sub(r"[^\w\s]", " ", text)
 
     text = re.sub(r"\s+", " ", text)
@@ -316,18 +269,7 @@ def normalize_for_comparison(text):
 
 
 def get_vulnerability_key(vulnerability):
-    """
-    Generate a key for duplicate detection.
-
-    First preference:
-        aliases supplied by OSV.
-
-    Otherwise:
-        normalized summary.
-
-    Otherwise:
-        normalized first part of details.
-    """
+    """Generate a key for duplicate detection."""
 
     aliases = vulnerability.get(
         "aliases",
@@ -336,12 +278,12 @@ def get_vulnerability_key(vulnerability):
 
     if aliases:
 
-        # Prefer GHSA as the canonical identifier.
         ghsa_aliases = [
             alias for alias in aliases if str(alias).upper().startswith("GHSA-")
         ]
 
         if ghsa_aliases:
+
             return (
                 "ALIAS:",
                 ghsa_aliases[0].upper(),
@@ -355,6 +297,7 @@ def get_vulnerability_key(vulnerability):
     summary = normalize_for_comparison(vulnerability.get("summary"))
 
     if summary:
+
         return (
             "SUMMARY:",
             summary,
@@ -363,6 +306,7 @@ def get_vulnerability_key(vulnerability):
     details = normalize_for_comparison(vulnerability.get("details"))
 
     if details:
+
         return (
             "DETAILS:",
             details[:500],
@@ -404,23 +348,11 @@ def advisory_priority(vulnerability):
 
 
 def merge_vulnerability(existing, new):
-    """
-    Merge two records that represent the same vulnerability.
-
-    Keeps:
-        - best advisory ID
-        - highest severity
-        - best reason
-        - best recommendation
-    """
+    """Merge two records representing the same vulnerability."""
 
     existing_severity = normalize_severity(existing.get("severity"))
 
     new_severity = normalize_severity(new.get("severity"))
-
-    # ------------------------------------------------------------
-    # Select the preferred advisory ID.
-    # ------------------------------------------------------------
 
     if advisory_priority(new) > advisory_priority(existing):
 
@@ -429,26 +361,14 @@ def merge_vulnerability(existing, new):
         if new.get("summary"):
             existing["summary"] = new.get("summary")
 
-    # ------------------------------------------------------------
-    # Keep highest severity.
-    # ------------------------------------------------------------
-
     existing["severity"] = highest_severity(
         existing_severity,
         new_severity,
     )
 
-    # ------------------------------------------------------------
-    # Prefer a useful summary.
-    # ------------------------------------------------------------
-
     if not existing.get("summary") and new.get("summary"):
 
         existing["summary"] = new.get("summary")
-
-    # ------------------------------------------------------------
-    # Prefer recommendation with a fixed version.
-    # ------------------------------------------------------------
 
     existing_solution = existing.get(
         "solution",
@@ -471,9 +391,7 @@ def merge_vulnerability(existing, new):
 
 
 def deduplicate_vulnerabilities(vulnerabilities):
-    """
-    Remove duplicate GHSA/PYSEC records.
-    """
+    """Remove duplicate GHSA/PYSEC records."""
 
     grouped = {}
 
@@ -524,9 +442,7 @@ DEPENDENCY_ECOSYSTEMS = {
 
 
 def extract_dependencies(details):
-    """
-    Extract dependencies from added/changed PR lines.
-    """
+    """Extract dependencies from added/changed PR lines."""
 
     result = []
 
@@ -691,19 +607,13 @@ def extract_dependencies(details):
 
             dependencies = data["dependencies"]
 
-            if isinstance(
-                dependencies,
-                dict,
-            ):
+            if isinstance(dependencies, dict):
 
                 for package_name, package_details in dependencies.items():
 
                     dependency_line = dependency_lines.get(package_name)
 
-                    if isinstance(
-                        package_details,
-                        dict,
-                    ):
+                    if isinstance(package_details, dict):
 
                         version = package_details.get("version")
 
@@ -754,9 +664,7 @@ def query_osv(
     ecosystem,
     version,
 ):
-    """
-    Query OSV for a package/version.
-    """
+    """Query OSV for a package/version."""
 
     payload = {
         "package": {
@@ -793,9 +701,16 @@ def query_osv(
 # ================================================================
 
 
-def check_vulnerabilities(pr_url):
+def check_vulnerabilities(
+    pr_url,
+    include_details=False,
+):
     """
     Scan PR dependency changes against OSV.
+
+    include_details:
+        True  -> include reasons and recommendations.
+        False -> return only core vulnerability information.
     """
 
     details = github_client.fetch_pr_details(pr_url)
@@ -877,7 +792,6 @@ def check_vulnerabilities(pr_url):
 
     for finding in raw_vulnerabilities:
 
-        # Prefer OSV aliases when available.
         aliases = finding.get(
             "aliases",
             [],
@@ -908,18 +822,15 @@ def check_vulnerabilities(pr_url):
 
             existing = package_groups[key]
 
-            # Keep the preferred advisory.
             if advisory_priority(finding) > advisory_priority(existing):
 
                 existing["id"] = finding["id"]
 
-            # Keep highest severity.
             existing["severity"] = highest_severity(
                 existing["severity"],
                 finding["severity"],
             )
 
-            # Keep useful summary.
             if not existing.get("summary") and finding.get("summary"):
 
                 existing["summary"] = finding["summary"]
@@ -950,34 +861,15 @@ def check_vulnerabilities(pr_url):
 
     print(f"Unique vulnerabilities found: " f"{len(vulnerabilities)}")
 
-    print(f"Highest severity: {highest}")
+    print(f"Highest severity: " f"{highest}")
 
-    print(f"Result: {verdict}")
-
-    # ============================================================
-    # USER DETAIL CHOICE
-    # ============================================================
-
-    while True:
-
-        choice = (
-            input(
-                "\nDo you want to see detailed " "reasons and recommendations? (y/n): "
-            )
-            .strip()
-            .lower()
-        )
-
-        if choice in ("y", "n"):
-            break
-
-        print("Please choose either y or n.")
+    print(f"Result: " f"{verdict}")
 
     # ============================================================
-    # DETAILED OUTPUT
+    # DETAIL OUTPUT
     # ============================================================
 
-    if choice == "y":
+    if include_details:
 
         print("\n===== VULNERABILITY DETAILS =====")
 
@@ -1064,4 +956,10 @@ if __name__ == "__main__":
 
     pr_url = sys.argv[1]
 
-    check_vulnerabilities(pr_url)
+    # Direct execution still works.
+    # Details are disabled by default because main.py
+    # is now responsible for the single user choice.
+    check_vulnerabilities(
+        pr_url,
+        include_details=False,
+    )

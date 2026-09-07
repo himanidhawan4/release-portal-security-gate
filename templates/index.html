@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Release Portal Security Gate</title>
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            color: #222;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 1100px;
+            margin: 40px auto;
+        }
+
+        .header {
+            background: #172033;
+            color: white;
+            padding: 35px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0 0 10px;
+            font-size: 32px;
+        }
+
+        .header p {
+            margin: 0;
+            color: #d7dce5;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            margin-top: 25px;
+            border-radius: 15px;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 14px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        button {
+            margin-top: 15px;
+            padding: 13px 25px;
+            border: none;
+            border-radius: 8px;
+            background: #172033;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .error {
+            margin-top: 20px;
+            padding: 15px;
+            background: #ffe5e5;
+            border-left: 5px solid #d00000;
+            border-radius: 5px;
+            color: #900;
+        }
+
+        .verdict {
+            text-align: center;
+            padding: 25px;
+            margin-bottom: 25px;
+            border-radius: 12px;
+        }
+
+        .blocked {
+            background: #ffe5e5;
+            border: 2px solid #d00000;
+        }
+
+        .allowed {
+            background: #e5f8e9;
+            border: 2px solid #16852e;
+        }
+
+        .verdict h2 {
+            margin: 0;
+            font-size: 30px;
+        }
+
+        .risk-score {
+            font-size: 20px;
+            margin-top: 10px;
+        }
+
+        .scan-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .scan-card {
+            background: #f7f8fa;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid #ddd;
+        }
+
+        .scan-card h3 {
+            margin-top: 0;
+            font-size: 17px;
+        }
+
+        .count {
+            font-size: 28px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        .block {
+            color: #d00000;
+            font-weight: bold;
+        }
+
+        .pass {
+            color: #16852e;
+            font-weight: bold;
+        }
+
+        .section {
+            margin-top: 25px;
+        }
+
+        .section h2 {
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th,
+        td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        th {
+            background: #f0f2f5;
+        }
+
+        .critical {
+            color: #d00000;
+            font-weight: bold;
+        }
+
+        .high {
+            color: #d35400;
+            font-weight: bold;
+        }
+
+        .moderate {
+            color: #b8860b;
+            font-weight: bold;
+        }
+
+        .low {
+            color: #16852e;
+            font-weight: bold;
+        }
+
+        details {
+            margin-top: 15px;
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: bold;
+            padding: 10px;
+            background: #f0f2f5;
+            border-radius: 7px;
+        }
+
+        .pr-url {
+            word-break: break-all;
+            color: #444;
+        }
+
+        @media (max-width: 800px) {
+
+            .scan-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+        }
+
+        @media (max-width: 500px) {
+
+            .scan-grid {
+                grid-template-columns: 1fr;
+            }
+
+        }
+
+    </style>
+
+</head>
+
+
+<body>
+
+<div class="container">
+
+    <!-- HEADER -->
+
+    <div class="header">
+
+        <h1>🛡️ Release Portal Security Gate</h1>
+
+        <p>
+            Automated DevSecOps Pull Request Security Analysis
+        </p>
+
+    </div>
+
+
+    <!-- INPUT -->
+
+    <div class="card">
+
+        <form method="POST">
+
+            <label for="pr_url">
+                GitHub Pull Request URL
+            </label>
+
+            <input
+                type="text"
+                id="pr_url"
+                name="pr_url"
+                placeholder="https://github.com/OWNER/REPOSITORY/pull/3"
+                value="{{ request.form.get('pr_url', '') }}"
+            >
+
+            <button type="submit">
+                🔍 Scan Pull Request
+            </button>
+
+        </form>
+
+
+        {% if error %}
+
+        <div class="error">
+            ❌ {{ error }}
+        </div>
+
+        {% endif %}
+
+    </div>
+
+
+    {% if result %}
+
+    <!-- FINAL VERDICT -->
+
+    {% if result.final_verdict == "BLOCK" %}
+
+    <div class="card verdict blocked">
+
+        <h2>❌ PULL REQUEST BLOCKED</h2>
+
+        <div class="risk-score">
+
+            Risk Score:
+            <strong>
+                {{ result.risk_analysis.score }}/100
+            </strong>
+
+            <br>
+
+            Risk Level:
+            <strong>
+                {{ result.risk_analysis.level }}
+            </strong>
+
+        </div>
+
+    </div>
+
+    {% else %}
+
+    <div class="card verdict allowed">
+
+        <h2>✅ PULL REQUEST ALLOWED</h2>
+
+        <div class="risk-score">
+
+            Risk Score:
+            <strong>
+                {{ result.risk_analysis.score }}/100
+            </strong>
+
+            <br>
+
+            Risk Level:
+            <strong>
+                {{ result.risk_analysis.level }}
+            </strong>
+
+        </div>
+
+    </div>
+
+    {% endif %}
+
+
+    <!-- PR INFORMATION -->
+
+    <div class="card">
+
+        <h2>📋 Pull Request</h2>
+
+        <p class="pr-url">
+            {{ result.pull_request }}
+        </p>
+
+    </div>
+
+
+    <!-- SCAN SUMMARY -->
+
+    <div class="card">
+
+        <h2>🔎 Security Scan Summary</h2>
+
+        <div class="scan-grid">
+
+
+            <!-- SECRET -->
+
+            <div class="scan-card">
+
+                <h3>🔐 Secrets</h3>
+
+                <div class="count">
+                    {{ result.secret_scan.count }}
+                </div>
+
+                {% if result.secret_scan.count > 0 %}
+
+                <div class="block">
+                    ❌ BLOCK
+                </div>
+
+                {% else %}
+
+                <div class="pass">
+                    ✅ PASS
+                </div>
+
+                {% endif %}
+
+            </div>
+
+
+            <!-- IAM -->
+
+            <div class="scan-card">
+
+                <h3>☁️ IAM</h3>
+
+                <div class="count">
+                    {{ result.iam_scan.count }}
+                </div>
+
+                {% if result.iam_scan.count > 0 %}
+
+                <div class="block">
+                    ❌ BLOCK
+                </div>
+
+                {% else %}
+
+                <div class="pass">
+                    ✅ PASS
+                </div>
+
+                {% endif %}
+
+            </div>
+
+
+            <!-- DEPENDENCIES -->
+
+            <div class="scan-card">
+
+                <h3>📦 Dependencies</h3>
+
+                <div class="count">
+                    {{ result.dependency_scan.count }}
+                </div>
+
+                {% if result.dependency_scan.count > 0 %}
+
+                <div class="block">
+                    ❌ BLOCK
+                </div>
+
+                {% else %}
+
+                <div class="pass">
+                    ✅ PASS
+                </div>
+
+                {% endif %}
+
+            </div>
+
+
+            <!-- SONAR -->
+
+            <div class="scan-card">
+
+                <h3>🔎 SonarCloud</h3>
+
+                <div class="count">
+                    {{ result.sonarqube_scan.total_issues }}
+                </div>
+
+                {% if result.sonarqube_scan.quality_gate == "OK" %}
+
+                <div class="pass">
+                    ✅ PASS
+                </div>
+
+                {% else %}
+
+                <div class="block">
+                    ❌ BLOCK
+                </div>
+
+                {% endif %}
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+
+    <!-- SECRET DETAILS -->
+
+    <div class="card section">
+
+        <h2>🔐 Secret Scan</h2>
+
+        <p>
+            Findings:
+            <strong>{{ result.secret_scan.count }}</strong>
+        </p>
+
+        {% if result.secret_scan.findings %}
+
+        <details>
+
+            <summary>
+                View Secret Findings
+            </summary>
+
+            <table>
+
+                <tr>
+                    <th>File</th>
+                    <th>Line</th>
+                    <th>Type</th>
+                    <th>Severity</th>
+                    <th>Verdict</th>
+                </tr>
+
+                {% for finding in result.secret_scan.findings %}
+
+                <tr>
+
+                    <td>{{ finding.FileName }}</td>
+
+                    <td>{{ finding.Line_Number }}</td>
+
+                    <td>{{ finding.Type }}</td>
+
+                    <td class="critical">
+                        {{ finding.Severity }}
+                    </td>
+
+                    <td class="block">
+                        {{ finding.Verdict }}
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </table>
+
+        </details>
+
+        {% else %}
+
+        <p class="pass">
+            ✅ No secrets detected.
+        </p>
+
+        {% endif %}
+
+    </div>
+
+
+    <!-- IAM DETAILS -->
+
+    <div class="card section">
+
+        <h2>☁️ IAM Wildcard Scan</h2>
+
+        <p>
+            Findings:
+            <strong>{{ result.iam_scan.count }}</strong>
+        </p>
+
+        {% if result.iam_scan.findings %}
+
+        <details>
+
+            <summary>
+                View IAM Findings
+            </summary>
+
+            <table>
+
+                <tr>
+                    <th>File</th>
+                    <th>Line</th>
+                    <th>Issue</th>
+                    <th>Match</th>
+                </tr>
+
+                {% for finding in result.iam_scan.findings %}
+
+                <tr>
+
+                    <td>{{ finding.file }}</td>
+
+                    <td>{{ finding.line }}</td>
+
+                    <td>{{ finding.issue }}</td>
+
+                    <td>
+                        <code>{{ finding.match }}</code>
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </table>
+
+        </details>
+
+        {% else %}
+
+        <p class="pass">
+            ✅ No IAM wildcard findings.
+        </p>
+
+        {% endif %}
+
+    </div>
+
+
+    <!-- DEPENDENCY DETAILS -->
+
+    <div class="card section">
+
+        <h2>📦 Dependency Vulnerability Scan</h2>
+
+        <p>
+            Vulnerabilities:
+            <strong>{{ result.dependency_scan.count }}</strong>
+        </p>
+
+        {% if result.dependency_scan.findings %}
+
+        <details>
+
+            <summary>
+                View Dependency Vulnerabilities
+            </summary>
+
+            <table>
+
+                <tr>
+                    <th>Package</th>
+                    <th>Version</th>
+                    <th>Severity</th>
+                    <th>ID</th>
+                    <th>Solution</th>
+                </tr>
+
+                {% for finding in result.dependency_scan.findings %}
+
+                <tr>
+
+                    <td>
+                        {{ finding.package }}
+                    </td>
+
+                    <td>
+                        {{ finding.version }}
+                    </td>
+
+                    <td>
+
+                        {% if finding.severity == "CRITICAL" %}
+
+                        <span class="critical">
+                            CRITICAL
+                        </span>
+
+                        {% elif finding.severity == "HIGH" %}
+
+                        <span class="high">
+                            HIGH
+                        </span>
+
+                        {% elif finding.severity in ["MODERATE", "MEDIUM"] %}
+
+                        <span class="moderate">
+                            {{ finding.severity }}
+                        </span>
+
+                        {% else %}
+
+                        <span class="low">
+                            {{ finding.severity }}
+                        </span>
+
+                        {% endif %}
+
+                    </td>
+
+                    <td>
+                        {{ finding.id }}
+                    </td>
+
+                    <td>
+                        {{ finding.solution }}
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </table>
+
+        </details>
+
+        {% else %}
+
+        <p class="pass">
+            ✅ No dependency vulnerabilities detected.
+        </p>
+
+        {% endif %}
+
+    </div>
+
+
+    <!-- SONARCLOUD -->
+
+    <div class="card section">
+
+        <h2>🔎 SonarCloud Analysis</h2>
+
+        <p>
+            Status:
+            <strong>
+                {{ result.sonarqube_scan.status }}
+            </strong>
+        </p>
+
+        <p>
+            Quality Gate:
+            <strong>
+                {{ result.sonarqube_scan.quality_gate }}
+            </strong>
+        </p>
+
+        <p>
+            Issues:
+            <strong>
+                {{ result.sonarqube_scan.total_issues }}
+            </strong>
+        </p>
+
+        {% if result.sonarqube_scan.total_issues == 0 %}
+
+        <p class="pass">
+            ✅ No SonarCloud security issues found.
+        </p>
+
+        {% endif %}
+
+    </div>
+
+
+    {% endif %}
+
+</div>
+
+</body>
+
+</html>

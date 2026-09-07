@@ -767,7 +767,7 @@ def cleanup_temp_directory(
 
 def run_sonarqube_scan(
     pr_url,
-    include_details=True,
+    include_details=False,
 ):
     """
     Complete SonarCloud PR security scan.

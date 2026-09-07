@@ -3,18 +3,45 @@ import src.github_client as github_client
 import sys
 import json
 
+# =========================================================
+# IAM WILDCARD SCANNER
+# =========================================================
+#
+# include_details=False
+#     -> Returns findings without importance/recommendation.
+#
+# include_details=True
+#     -> Returns findings with importance/recommendation.
+#
+# IMPORTANT:
+# There is NO input() in this scanner.
+# The user preference is controlled by src.main.
+#
+# =========================================================
 
-def check_wildcards(pr_url):
+
+def check_wildcards(pr_url, include_details=False):
+
+    # =====================================================
+    # REGEX PATTERNS
+    # =====================================================
+
     hunk_pattern = r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@"
-    action_wildcard_pattern = r'\s*"?\s*Action\s*"?\s*(=|:)\s*"\*"'
-    resource_wildcard_pattern = r'\s*"?\s*Resource\s*"?\s*(=|:)\s*"\*"'
-    findings = []
-    choice = input(
-        "Do you want importance and recommendation for IAM wildcards? (y/n): "
-    ).lower()
 
-    while choice not in ("y", "n"):
-        choice = input("Please choose y or n: ").lower()
+    action_wildcard_pattern = r'\s*"?\s*Action\s*"?\s*(=|:)\s*"\*"'
+
+    resource_wildcard_pattern = r'\s*"?\s*Resource\s*"?\s*(=|:)\s*"\*"'
+
+    # =====================================================
+    # RESULT STORAGE
+    # =====================================================
+
+    findings = []
+
+    # =====================================================
+    # IMPORTANCE / RECOMMENDATIONS
+    # =====================================================
+
     importance = {
         "IAM wildcard Action": {
             "importance": (
@@ -93,108 +120,183 @@ def check_wildcards(pr_url):
             ),
         },
     }
+
+    # =====================================================
+    # FETCH PR DETAILS
+    # =====================================================
+
     details = github_client.fetch_pr_details(pr_url)
 
     if not details:
         return []
 
+    # =====================================================
+    # PROCESS CHANGED FILES
+    # =====================================================
+
     for file, patchs in details["changed_files"]:
+
         filename = file
         patch = patchs
         lineno = None
 
-        if filename.lower().endswith((".tf", ".json")):
-            patch = patch.splitlines()
+        # -------------------------------------------------
+        # Only scan Terraform and JSON files
+        # -------------------------------------------------
 
-            for line in patch:
-                if line.startswith("@@"):
-                    hunk_match = re.match(hunk_pattern, line)
+        if not filename.lower().endswith((".tf", ".json")):
+            continue
 
-                    if hunk_match:
-                        lineno = int(hunk_match.group(1))
-                    continue
+        patch = patch.splitlines()
 
-                if line.startswith(("+++", "---")):
-                    continue
+        # -------------------------------------------------
+        # PROCESS PATCH
+        # -------------------------------------------------
 
-                if line.startswith("-"):
-                    continue
+        for line in patch:
 
-                if lineno is None:
-                    continue
+            # ---------------------------------------------
+            # Git diff hunk header
+            # ---------------------------------------------
 
-                elif line.startswith(" "):
+            if line.startswith("@@"):
+
+                hunk_match = re.match(hunk_pattern, line)
+
+                if hunk_match:
+                    lineno = int(hunk_match.group(1))
+
+                continue
+
+            # ---------------------------------------------
+            # Ignore diff headers
+            # ---------------------------------------------
+
+            if line.startswith(("+++", "---")):
+                continue
+
+            # ---------------------------------------------
+            # Removed lines
+            # ---------------------------------------------
+
+            if line.startswith("-"):
+                continue
+
+            # ---------------------------------------------
+            # Make sure line number exists
+            # ---------------------------------------------
+
+            if lineno is None:
+                continue
+
+            # ---------------------------------------------
+            # Context line
+            # ---------------------------------------------
+
+            if line.startswith(" "):
+
+                lineno += 1
+                continue
+
+            # ---------------------------------------------
+            # Added line
+            # ---------------------------------------------
+
+            if line.startswith("+"):
+
+                content = line[1:]
+
+                # -----------------------------------------
+                # Ignore comments
+                # -----------------------------------------
+
+                if content.lstrip().startswith(("#", "//")):
+
                     lineno += 1
+                    continue
 
-                elif line.startswith("+"):
-                    content = line[1:]
+                # -----------------------------------------
+                # IAM wildcard Action
+                # -----------------------------------------
 
-                    if content.lstrip().startswith(("#", "//")):
-                        # Skip comment lines
-                        lineno += 1
-                        continue
+                if re.match(action_wildcard_pattern, content):
 
-                    if re.match(action_wildcard_pattern, content):
-                        if choice == "n":
-                            findings.append(
-                                {
-                                    "file": filename,
-                                    "line": lineno,
-                                    "issue": "IAM wildcard Action",
-                                    "match": content.strip(),
-                                }
-                            )
-                        elif choice == "y":
-                            findings.append(
-                                {
-                                    "file": filename,
-                                    "line": lineno,
-                                    "issue": "IAM wildcard Action",
-                                    "match": content.strip(),
-                                    "Importance": importance["IAM wildcard Action"][
-                                        "importance"
-                                    ],
-                                    "Recommendation": importance["IAM wildcard Action"][
-                                        "recommendation"
-                                    ],
-                                }
-                            )
+                    finding = {
+                        "file": filename,
+                        "line": lineno,
+                        "issue": "IAM wildcard Action",
+                        "match": content.strip(),
+                    }
 
-                    elif re.match(resource_wildcard_pattern, content):
-                        if choice == "n":
-                            findings.append(
-                                {
-                                    "file": filename,
-                                    "line": lineno,
-                                    "issue": "IAM wildcard Resource",
-                                    "match": content.strip(),
-                                }
-                            )
-                        elif choice == "y":
-                            findings.append(
-                                {
-                                    "file": filename,
-                                    "line": lineno,
-                                    "issue": "IAM wildcard Resource",
-                                    "match": content.strip(),
-                                    "Importance": importance["IAM wildcard Resource"][
-                                        "importance"
-                                    ],
-                                    "Recommendation": importance[
-                                        "IAM wildcard Resource"
-                                    ]["recommendation"],
-                                }
-                            )
-                    lineno += 1
+                    # -------------------------------------
+                    # Add details only if requested
+                    # -------------------------------------
+
+                    if include_details:
+
+                        finding["Importance"] = importance["IAM wildcard Action"][
+                            "importance"
+                        ]
+
+                        finding["Recommendation"] = importance["IAM wildcard Action"][
+                            "recommendation"
+                        ]
+
+                    findings.append(finding)
+
+                # -----------------------------------------
+                # IAM wildcard Resource
+                # -----------------------------------------
+
+                elif re.match(resource_wildcard_pattern, content):
+
+                    finding = {
+                        "file": filename,
+                        "line": lineno,
+                        "issue": "IAM wildcard Resource",
+                        "match": content.strip(),
+                    }
+
+                    # -------------------------------------
+                    # Add details only if requested
+                    # -------------------------------------
+
+                    if include_details:
+
+                        finding["Importance"] = importance["IAM wildcard Resource"][
+                            "importance"
+                        ]
+
+                        finding["Recommendation"] = importance["IAM wildcard Resource"][
+                            "recommendation"
+                        ]
+
+                    findings.append(finding)
+
+                # -----------------------------------------
+                # Move to next line
+                # -----------------------------------------
+
+                lineno += 1
+
+    # =====================================================
+    # DISPLAY SUMMARY
+    # =====================================================
 
     print("\n===== IAM WILDCARD SCAN SUMMARY =====")
-    print(f"Files checked: {len(details['changed_files'])}")
-    print(f"Wildcard findings: {len(findings)}")
+
+    print(f"Files checked: " f"{len(details['changed_files'])}")
+
+    print(f"Wildcard findings: " f"{len(findings)}")
 
     if findings:
         print("Result: BLOCK")
     else:
         print("Result: PASS")
+
+    # =====================================================
+    # DISPLAY JSON RESULT
+    # =====================================================
 
     print("\n===== JSON RESULT =====")
 
@@ -203,8 +305,31 @@ def check_wildcards(pr_url):
     return findings
 
 
-"""
+# =========================================================
+# COMMAND-LINE ENTRY POINT
+# =========================================================
+#
+# The scanner does not ask for user input.
+# src.main handles the user preference.
+#
+# =========================================================
 
+
+"""
 if __name__ == "__main__":
-    check_wildcards(sys.argv[1])
+
+    if len(sys.argv) > 1:
+
+        check_wildcards(
+            sys.argv[1],
+            include_details=True
+        )
+
+    else:
+
+        print(
+            "Usage: "
+            "python -m src.checks.iam "
+            "<GitHub PR URL>"
+        )
 """

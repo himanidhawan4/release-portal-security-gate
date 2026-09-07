@@ -1,4 +1,3 @@
-import sys
 import json
 
 from src.checks import secrets
@@ -6,132 +5,100 @@ from src.checks import iam
 from src.checks import cve
 from src.checks import sonarqube
 
-# ============================================================
-# HEADER
-# ============================================================
-
-
-def print_header():
-    print("\n" + "=" * 75)
-    print("                    RELEASE PORTAL SECURITY GATE")
-    print("=" * 75)
-
 
 # ============================================================
-# RUN SECRET SCAN
+# USER PREFERENCE
 # ============================================================
 
+def ask_for_details():
+    """
+    Ask the user whether they want importance/reasons/
+    recommendations in the final result.
+    """
 
-def run_secret_scan(pr_url):
-    print("\n" + "=" * 75)
-    print("🔐 RUNNING SECRET SCAN")
-    print("=" * 75)
+    while True:
+        choice = input(
+            "\nDo you want importance, reasons and recommendations "
+            "along with the final verdict? (y/n): "
+        ).strip().lower()
 
-    try:
-        result = secrets.check_secrets_in_pr(pr_url)
+        if choice == "y":
+            return True
 
-        if result is None:
-            return []
+        if choice == "n":
+            return False
 
-        return result
-
-    except Exception as e:
-        print(f"❌ Secret scan failed: {e}")
-        return []
+        print("Please enter only 'y' or 'n'.")
 
 
 # ============================================================
-# RUN IAM SCAN
+# SECURITY SCANNERS
 # ============================================================
 
-
-def run_iam_scan(pr_url):
-    print("\n" + "=" * 75)
-    print("☁️ RUNNING IAM WILDCARD SCAN")
-    print("=" * 75)
-
-    try:
-        result = iam.check_wildcards(pr_url)
-
-        if result is None:
-            return []
-
-        return result
-
-    except Exception as e:
-        print(f"❌ IAM scan failed: {e}")
-        return []
+def run_secret_scan(pr_url, include_details=False):
+    """
+    Run secret scanning on the Pull Request.
+    """
+    return secrets.check_secrets_in_pr(
+        pr_url,
+        include_details=include_details
+    )
 
 
-# ============================================================
-# RUN DEPENDENCY / CVE SCAN
-# ============================================================
+def run_iam_scan(pr_url, include_details=False):
+    """
+    Run IAM wildcard scanning on the Pull Request.
+    """
+    return iam.check_wildcards(
+        pr_url,
+        include_details=include_details
+    )
 
 
-def run_cve_scan(pr_url):
-    print("\n" + "=" * 75)
-    print("📦 RUNNING DEPENDENCY VULNERABILITY SCAN")
-    print("=" * 75)
+def run_cve_scan(pr_url, include_details=False):
+    """
+    Run dependency vulnerability scanning using OSV.
+    """
+    return cve.check_vulnerabilities(
+        pr_url,
+        include_details=include_details
+    )
 
-    try:
-        # Current cve.py prints its results but does not return them.
-        result = cve.check_vulnerabilities(pr_url)
 
-        if result is None:
-            return []
-
-        return result
-
-    except Exception as e:
-        print(f"❌ Dependency scan failed: {e}")
-        return []
+def run_sonar_scan(pr_url, include_details=False):
+    """
+    Run SonarCloud analysis.
+    """
+    return sonarqube.run_sonarqube_scan(
+        pr_url,
+        include_details=include_details
+    )
 
 
 # ============================================================
-# RUN SONARCLOUD SCAN
+# FINDING COUNTERS
 # ============================================================
 
+def count_findings(results):
+    """
+    Safely count findings returned by a scanner.
 
-def run_sonar_scan(pr_url):
-    print("\n" + "=" * 75)
-    print("🔎 RUNNING SONARCLOUD ANALYSIS")
-    print("=" * 75)
+    Supports:
+        list
+        dictionary containing 'findings'
+        dictionary containing 'total_issues'
+    """
 
-    try:
-        # SonarCloud scanner has its own detailed-output choice.
-        result = sonarqube.run_sonarqube_scan(pr_url, include_details=True)
+    if isinstance(results, list):
+        return len(results)
 
-        if result is None:
-            return {}
+    if isinstance(results, dict):
 
-        return result
+        if isinstance(results.get("findings"), list):
+            return len(results["findings"])
 
-    except Exception as e:
-        print(f"❌ SonarCloud scan failed: {e}")
-
-        return {"tool": "SonarCloud", "status": "ERROR", "error": str(e)}
-
-
-# ============================================================
-# COUNT FINDINGS
-# ============================================================
-
-
-def count_findings(result):
-
-    if not result:
-        return 0
-
-    if isinstance(result, list):
-        return len(result)
-
-    if isinstance(result, dict):
-
-        if "findings" in result:
-            return len(result["findings"])
-
-        if "vulnerabilities" in result:
-            return len(result["vulnerabilities"])
+        if isinstance(results.get("total_issues"), int):
+            return results["total_issues"]
 
     return 0
 
@@ -140,18 +107,37 @@ def count_findings(result):
 # RISK SCORE
 # ============================================================
 
+def calculate_risk_score(
+    secret_results,
+    iam_results,
+    dependency_results,
+    sonar_results
+):
+    """
+    Calculate overall risk score.
 
-def calculate_risk_score(secret_results, iam_results, cve_results, sonar_results):
+    Maximum score = 100
+    """
 
     score = 0
 
     # --------------------------------------------------------
-    # Secrets
+    # SECRET SCAN
     # --------------------------------------------------------
 
-    for finding in secret_results:
+    secret_findings = []
 
-        severity = str(finding.get("Severity", "")).upper()
+    if isinstance(secret_results, list):
+        secret_findings = secret_results
+
+    elif isinstance(secret_results, dict):
+        secret_findings = secret_results.get("findings", [])
+
+    for finding in secret_findings:
+
+        severity = str(
+            finding.get("Severity", finding.get("severity", ""))
+        ).upper()
 
         if severity == "CRITICAL":
             score += 10
@@ -165,28 +151,41 @@ def calculate_risk_score(secret_results, iam_results, cve_results, sonar_results
         elif severity == "LOW":
             score += 2
 
-        else:
-            score += 1
-
     # --------------------------------------------------------
-    # IAM
+    # IAM SCAN
     # --------------------------------------------------------
 
-    for finding in iam_results:
-        # IAM wildcard findings are considered high risk.
+    iam_findings = []
+
+    if isinstance(iam_results, list):
+        iam_findings = iam_results
+
+    elif isinstance(iam_results, dict):
+        iam_findings = iam_results.get("findings", [])
+
+    for _ in iam_findings:
         score += 8
 
     # --------------------------------------------------------
-    # CVE
-    #
-    # Current cve.py does not return its findings, so this
-    # section will automatically remain 0 until cve.py returns
-    # its results.
+    # DEPENDENCY / CVE SCAN
     # --------------------------------------------------------
 
-    for finding in cve_results:
+    dependency_findings = []
 
-        severity = str(finding.get("severity", "")).upper()
+    if isinstance(dependency_results, list):
+        dependency_findings = dependency_results
+
+    elif isinstance(dependency_results, dict):
+        dependency_findings = dependency_results.get("findings", [])
+
+    for finding in dependency_findings:
+
+        severity = str(
+            finding.get(
+                "severity",
+                finding.get("Severity", "")
+            )
+        ).upper()
 
         if severity == "CRITICAL":
             score += 10
@@ -200,39 +199,56 @@ def calculate_risk_score(secret_results, iam_results, cve_results, sonar_results
         elif severity == "LOW":
             score += 2
 
-        else:
-            score += 1
-
     # --------------------------------------------------------
-    # SonarCloud
+    # SONARCLOUD
     # --------------------------------------------------------
 
     if isinstance(sonar_results, dict):
 
-        for finding in sonar_results.get("findings", []):
+        # Sonar issues
+        sonar_findings = sonar_results.get("findings", [])
 
-            severity = str(finding.get("severity", "")).upper()
+        if isinstance(sonar_findings, list):
 
-            if severity == "BLOCKER":
-                score += 10
+            for finding in sonar_findings:
 
-            elif severity == "CRITICAL":
-                score += 8
+                severity = str(
+                    finding.get(
+                        "severity",
+                        finding.get("Severity", "")
+                    )
+                ).upper()
 
-            elif severity == "MAJOR":
+                if severity == "BLOCKER":
+                    score += 10
+
+                elif severity == "CRITICAL":
+                    score += 8
+
+                elif severity == "MAJOR":
+                    score += 5
+
+                elif severity == "MINOR":
+                    score += 2
+
+        # Quality Gate
+        quality_gate = sonar_results.get("quality_gate", {})
+
+        if isinstance(quality_gate, dict):
+
+            gate_status = str(
+                quality_gate.get("status", "")
+            ).upper()
+
+            if gate_status and gate_status != "OK":
                 score += 5
 
-            elif severity == "MINOR":
-                score += 2
+        elif isinstance(quality_gate, str):
 
-            else:
-                score += 1
+            if quality_gate.upper() != "OK":
+                score += 5
 
-        quality_gate = str(sonar_results.get("quality_gate", "")).upper()
-
-        if quality_gate not in ("", "OK", "PASS", "PASSED"):
-            score += 5
-
+    # Never allow score above 100
     return min(score, 100)
 
 
@@ -240,8 +256,10 @@ def calculate_risk_score(secret_results, iam_results, cve_results, sonar_results
 # RISK LEVEL
 # ============================================================
 
-
 def get_risk_level(score):
+    """
+    Convert risk score into a risk level.
+    """
 
     if score == 0:
         return "LOW"
@@ -260,119 +278,180 @@ def get_risk_level(score):
 # FINAL VERDICT
 # ============================================================
 
+def calculate_final_verdict(
+    secret_results,
+    iam_results,
+    dependency_results,
+    sonar_results
+):
+    """
+    Decide whether the Pull Request should be ALLOWED or BLOCKED.
+    """
 
-def calculate_final_verdict(secret_results, iam_results, cve_results, sonar_results):
+    # --------------------------------------------------------
+    # SECRET FINDINGS
+    # --------------------------------------------------------
 
-    # Any detected secret blocks the PR.
-    if secret_results:
+    if count_findings(secret_results) > 0:
         return "BLOCK"
 
-    # IAM wildcard findings block the PR.
-    if iam_results:
+    # --------------------------------------------------------
+    # IAM FINDINGS
+    # --------------------------------------------------------
+
+    if count_findings(iam_results) > 0:
         return "BLOCK"
 
-    # Dependency vulnerabilities.
-    for finding in cve_results:
+    # --------------------------------------------------------
+    # DEPENDENCY FINDINGS
+    # --------------------------------------------------------
 
-        severity = str(finding.get("severity", "")).upper()
+    dependency_findings = []
 
-        if severity in ("CRITICAL", "HIGH", "MEDIUM", "MODERATE"):
+    if isinstance(dependency_results, list):
+        dependency_findings = dependency_results
+
+    elif isinstance(dependency_results, dict):
+        dependency_findings = dependency_results.get(
+            "findings",
+            []
+        )
+
+    for finding in dependency_findings:
+
+        severity = str(
+            finding.get(
+                "severity",
+                finding.get("Severity", "")
+            )
+        ).upper()
+
+        if severity in (
+            "CRITICAL",
+            "HIGH",
+            "MEDIUM",
+            "MODERATE"
+        ):
             return "BLOCK"
 
-    # SonarCloud.
+    # --------------------------------------------------------
+    # SONARCLOUD
+    # --------------------------------------------------------
+
     if isinstance(sonar_results, dict):
 
-        if sonar_results.get("status") == "ERROR":
+        status = str(
+            sonar_results.get("status", "")
+        ).upper()
+
+        if status in ("ERROR", "FAILED", "FAIL"):
             return "BLOCK"
 
-        quality_gate = str(sonar_results.get("quality_gate", "")).upper()
+        quality_gate = sonar_results.get(
+            "quality_gate",
+            {}
+        )
 
-        if quality_gate not in ("", "OK", "PASS", "PASSED"):
-            return "BLOCK"
+        if isinstance(quality_gate, dict):
 
-        if sonar_results.get("findings"):
-            return "BLOCK"
+            gate_status = str(
+                quality_gate.get("status", "")
+            ).upper()
+
+            if gate_status and gate_status != "OK":
+                return "BLOCK"
+
+        elif isinstance(quality_gate, str):
+
+            if quality_gate.upper() != "OK":
+                return "BLOCK"
+
+        sonar_findings = sonar_results.get(
+            "findings",
+            []
+        )
+
+        if isinstance(sonar_findings, list):
+            if len(sonar_findings) > 0:
+                return "BLOCK"
+
+    # --------------------------------------------------------
+    # EVERYTHING PASSED
+    # --------------------------------------------------------
 
     return "ALLOW"
 
 
 # ============================================================
-# FINAL SUMMARY
+# BUILD FINAL RESULT
 # ============================================================
-
-
-def print_final_summary(
-    secret_results,
-    iam_results,
-    cve_results,
-    sonar_results,
-    risk_score,
-    risk_level,
-    final_verdict,
-):
-
-    print("\n")
-    print("=" * 75)
-    print("                    FINAL SECURITY DECISION")
-    print("=" * 75)
-
-    print()
-
-    print(f"🔐 Secret Findings      : " f"{count_findings(secret_results)}")
-
-    print(f"☁️ IAM Findings         : " f"{count_findings(iam_results)}")
-
-    print(f"📦 Dependency Findings : " f"{count_findings(cve_results)}")
-
-    print(f"🔎 SonarCloud Findings : " f"{count_findings(sonar_results)}")
-
-    print()
-
-    print(f"📊 Risk Score           : {risk_score}/100")
-    print(f"⚠️ Risk Level           : {risk_level}")
-    print(f"🚦 Final Verdict        : {final_verdict}")
-
-    print()
-
-    if final_verdict == "BLOCK":
-        print("❌ Pull Request BLOCKED because " "security issues were detected.")
-    else:
-        print("✅ Pull Request ALLOWED. " "No blocking security issues were detected.")
-
-    print("=" * 75)
-
-
-# ============================================================
-# BUILD FINAL JSON
-# ============================================================
-
 
 def build_final_result(
     pr_url,
     secret_results,
     iam_results,
-    cve_results,
+    dependency_results,
     sonar_results,
     risk_score,
     risk_level,
-    final_verdict,
+    final_verdict
 ):
+    """
+    Create the final JSON-compatible result.
+    """
 
     return {
         "project": "Release Portal Security Gate",
+
         "pull_request": pr_url,
+
         "secret_scan": {
             "count": count_findings(secret_results),
-            "findings": secret_results,
+            "findings": (
+                secret_results
+                if isinstance(secret_results, list)
+                else secret_results.get("findings", [])
+                if isinstance(secret_results, dict)
+                else []
+            )
         },
-        "iam_scan": {"count": count_findings(iam_results), "findings": iam_results},
+
+        "iam_scan": {
+            "count": count_findings(iam_results),
+            "findings": (
+                iam_results
+                if isinstance(iam_results, list)
+                else iam_results.get("findings", [])
+                if isinstance(iam_results, dict)
+                else []
+            )
+        },
+
         "dependency_scan": {
-            "count": count_findings(cve_results),
-            "findings": cve_results,
+            "count": count_findings(dependency_results),
+            "findings": (
+                dependency_results
+                if isinstance(dependency_results, list)
+                else dependency_results.get("findings", [])
+                if isinstance(dependency_results, dict)
+                else []
+            )
         },
-        "sonarqube_scan": sonar_results,
-        "risk_analysis": {"score": risk_score, "level": risk_level},
-        "final_verdict": final_verdict,
+
+        "sonarqube_scan": (
+            sonar_results
+            if isinstance(sonar_results, dict)
+            else {
+                "findings": sonar_results
+            }
+        ),
+
+        "risk_analysis": {
+            "score": risk_score,
+            "level": risk_level
+        },
+
+        "final_verdict": final_verdict
     }
 
 
@@ -380,94 +459,205 @@ def build_final_result(
 # MAIN SECURITY GATE
 # ============================================================
 
+def run_security_gate(pr_url, include_details=None):
+    """
+    Main security gate.
 
-def run_security_gate(pr_url):
+    If include_details is None:
+        Ask the user.
 
-    print_header()
+    If include_details is True:
+        Show importance/reasons/recommendations.
 
-    # --------------------------------------------------------
-    # Run each scanner.
-    # Each scanner handles its own detailed-output question.
-    # --------------------------------------------------------
-
-    secret_results = run_secret_scan(pr_url)
-
-    iam_results = run_iam_scan(pr_url)
-
-    cve_results = run_cve_scan(pr_url)
-
-    sonar_results = run_sonar_scan(pr_url)
+    If include_details is False:
+        Show only the main findings/verdict information.
+    """
 
     # --------------------------------------------------------
-    # Risk analysis
+    # ASK USER ONLY ONCE
+    # --------------------------------------------------------
+
+    if include_details is None:
+        include_details = ask_for_details()
+
+    print("\n" + "=" * 75)
+    print("                 RELEASE PORTAL SECURITY GATE")
+    print("=" * 75)
+
+    print(f"\nPull Request: {pr_url}")
+
+    if include_details:
+        print("Details: ENABLED")
+    else:
+        print("Details: DISABLED")
+
+    # --------------------------------------------------------
+    # SECRET SCAN
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 75)
+    print("🔐 RUNNING SECRET SCAN")
+    print("=" * 75)
+
+    try:
+        secret_results = run_secret_scan(
+            pr_url,
+            include_details=include_details
+        )
+    except Exception as e:
+        print(f"❌ Secret scan failed: {e}")
+        secret_results = []
+
+    # --------------------------------------------------------
+    # IAM SCAN
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 75)
+    print("🔑 RUNNING IAM WILDCARD SCAN")
+    print("=" * 75)
+
+    try:
+        iam_results = run_iam_scan(
+            pr_url,
+            include_details=include_details
+        )
+    except Exception as e:
+        print(f"❌ IAM scan failed: {e}")
+        iam_results = []
+
+    # --------------------------------------------------------
+    # DEPENDENCY / CVE SCAN
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 75)
+    print("📦 RUNNING DEPENDENCY VULNERABILITY SCAN")
+    print("=" * 75)
+
+    try:
+        dependency_results = run_cve_scan(
+            pr_url,
+            include_details=include_details
+        )
+    except Exception as e:
+        print(f"❌ Dependency scan failed: {e}")
+        dependency_results = []
+
+    # --------------------------------------------------------
+    # SONARCLOUD
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 75)
+    print("📊 RUNNING SONARCLOUD SCAN")
+    print("=" * 75)
+
+    try:
+        sonar_results = run_sonar_scan(
+            pr_url,
+            include_details=include_details
+        )
+    except Exception as e:
+        print(f"❌ SonarCloud scan failed: {e}")
+        sonar_results = {
+            "tool": "SonarCloud",
+            "status": "ERROR",
+            "quality_gate": {
+                "status": "ERROR"
+            },
+            "total_issues": 0,
+            "findings": [],
+            "error": str(e)
+        }
+
+    # --------------------------------------------------------
+    # RISK SCORE
     # --------------------------------------------------------
 
     risk_score = calculate_risk_score(
-        secret_results, iam_results, cve_results, sonar_results
+        secret_results,
+        iam_results,
+        dependency_results,
+        sonar_results
     )
 
     risk_level = get_risk_level(risk_score)
 
     # --------------------------------------------------------
-    # Automatic final verdict
+    # FINAL VERDICT
     # --------------------------------------------------------
 
     final_verdict = calculate_final_verdict(
-        secret_results, iam_results, cve_results, sonar_results
-    )
-
-    # --------------------------------------------------------
-    # Display final summary
-    # --------------------------------------------------------
-
-    print_final_summary(
         secret_results,
         iam_results,
-        cve_results,
-        sonar_results,
-        risk_score,
-        risk_level,
-        final_verdict,
+        dependency_results,
+        sonar_results
     )
 
     # --------------------------------------------------------
-    # Final JSON
+    # BUILD RESULT
     # --------------------------------------------------------
 
     final_result = build_final_result(
         pr_url,
         secret_results,
         iam_results,
-        cve_results,
+        dependency_results,
         sonar_results,
         risk_score,
         risk_level,
-        final_verdict,
+        final_verdict
     )
 
-    print("\nFinal JSON Result")
-    print("=================")
+    # --------------------------------------------------------
+    # DISPLAY FINAL RESULT
+    # --------------------------------------------------------
 
-    print(json.dumps(final_result, indent=2))
+    print("\n" + "=" * 75)
+    print("                    FINAL SECURITY VERDICT")
+    print("=" * 75)
+
+    print(f"\nRisk Score : {risk_score}/100")
+    print(f"Risk Level : {risk_level}")
+    print(f"Verdict    : {final_verdict}")
+
+    print("\n" + "=" * 75)
+    print("                    FINAL JSON RESULT")
+    print("=" * 75)
+
+    print(
+        json.dumps(
+            final_result,
+            indent=4
+        )
+    )
 
     return final_result
 
 
 # ============================================================
-# PROGRAM ENTRY POINT
+# COMMAND-LINE ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
 
+    import sys
+
     if len(sys.argv) != 2:
 
         print(
-            "Usage:\n"
-            'python -m src.main "https://github.com/OWNER/REPOSITORY/pull/NUMBER"'
+            "\nUsage:"
+        )
+
+        print(
+            'python -m src.main "https://github.com/OWNER/REPO/pull/NUMBER"'
         )
 
         sys.exit(1)
 
-    pr_url = sys.argv[1].strip()
+    pr_url = sys.argv[1]
 
-    run_security_gate(pr_url)
+    # include_details=None means:
+    # ASK THE USER whether they want details.
+    run_security_gate(
+        pr_url,
+        include_details=None
+    )
