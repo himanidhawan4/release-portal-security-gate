@@ -1,133 +1,78 @@
 from flask import Flask, render_template, request
-import subprocess
-import sys
-import json
 import re
+
+from src.main import run_security_gate
 
 app = Flask(__name__)
 
 
-# ============================================================
-# RUN SECURITY GATE
-# ============================================================
+def is_valid_pr_url(pr_url):
+    if not pr_url:
+        return False
 
+    pattern = r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+/?$"
 
-def run_security_gate(pr_url):
-
-    try:
-
-        process = subprocess.run(
-            [sys.executable, "-m", "src.main", pr_url],
-            input="n\nn\n",
-            text=True,
-            capture_output=True,
-            cwd="C:\\Projects\\release-portal-security-gate",
-        )
-
-        output = process.stdout
-
-        # ----------------------------------------------------
-        # If Python program failed
-        # ----------------------------------------------------
-
-        if process.returncode != 0:
-
-            return {
-                "error": "Security gate failed.",
-                "details": process.stderr or output,
-            }
-
-        # ----------------------------------------------------
-        # Find "Final JSON Result"
-        # ----------------------------------------------------
-
-        marker = "Final JSON Result"
-
-        if marker not in output:
-
-            return {"error": "Final JSON Result was not found.", "details": output}
-
-        json_part = output.split(marker, 1)[1]
-
-        # ----------------------------------------------------
-        # Find first {
-        # ----------------------------------------------------
-
-        start = json_part.find("{")
-
-        if start == -1:
-
-            return {"error": "JSON result could not be found.", "details": output}
-
-        json_part = json_part[start:]
-
-        # ----------------------------------------------------
-        # Find matching JSON object
-        # ----------------------------------------------------
-
-        decoder = json.JSONDecoder()
-
-        try:
-
-            result, _ = decoder.raw_decode(json_part)
-
-        except json.JSONDecodeError as e:
-
-            return {"error": f"Could not parse JSON result: {e}", "details": output}
-
-        return result
-
-    except Exception as e:
-
-        return {"error": str(e)}
-
-
-# ============================================================
-# HOME PAGE
-# ============================================================
+    return re.fullmatch(pattern, pr_url) is not None
 
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-
     result = None
     error = None
+    include_details = False
+    pr_url = ""
 
-    if request.method == "POST":
+    if request.method == "GET":
+        return render_template(
+            "index.html",
+            result=None,
+            error=None,
+            include_details=False,
+            pr_url="",
+        )
 
-        pr_url = request.form.get("pr_url", "").strip()
+    pr_url = request.form.get("pr_url", "").strip()
+    include_details = request.form.get("include_details") == "on"
 
-        # ----------------------------------------------------
-        # Validate URL
-        # ----------------------------------------------------
+    if not pr_url:
+        error = "Please enter a GitHub Pull Request URL."
 
-        if not pr_url:
+    elif not is_valid_pr_url(pr_url):
+        error = (
+            "Please enter a valid GitHub Pull Request URL. "
+            "Example: https://github.com/owner/repository/pull/123"
+        )
 
-            error = "Please enter a GitHub Pull Request URL."
+    else:
+        try:
+            result = run_security_gate(
+                pr_url,
+                include_details=include_details,
+            )
 
-        elif not re.match(r"^https://github\.com/[^/]+/[^/]+/pull/\d+/?$", pr_url):
+            if isinstance(result, dict) and result.get("error"):
+                error = result.get(
+                    "error",
+                    "Security gate could not complete.",
+                )
+                result = None
 
-            error = "Please enter a valid GitHub Pull Request URL."
+        except Exception as e:
+            error = f"Security gate failed: {str(e)}"
+            result = None
 
-        else:
+    return render_template(
+        "index.html",
+        result=result,
+        error=error,
+        include_details=include_details,
+        pr_url=pr_url,
+    )
 
-            result = run_security_gate(pr_url)
-
-            # ------------------------------------------------
-            # Check if scanner returned an error
-            # ------------------------------------------------
-
-            if "error" in result:
-
-                error = result["error"]
-
-    return render_template("index.html", result=result, error=error)
-
-
-# ============================================================
-# START FLASK
-# ============================================================
 
 if __name__ == "__main__":
-
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    app.run(
+        debug=False,
+        host="127.0.0.1",
+        port=5000,
+    )

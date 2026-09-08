@@ -213,17 +213,26 @@ def fetch_pr_details(pr_url):
         "owner": owner,
         "repo": repo,
         "pull_number": pull_number,
-        # SonarCloud PR analysis information
+
+        # Pull Request information
+        "title": pr_data.get("title"),
+        "state": pr_data.get("state"),
+        "commits": pr_data.get("commits", 0),
+        "changed_files_count": pr_data.get("changed_files", 0),
+        "additions": pr_data.get("additions", 0),
+        "deletions": pr_data.get("deletions", 0),
+
+        # Branch and commit information
         "head_branch": head_branch,
         "base_branch": base_branch,
         "head_sha": head_sha,
+
         # Repository information
         "clone_url": clone_url,
+
         # GitHub PR changes
         "changed_files": changed_files,
     }
-
-
 # -------------------------------------------------------------
 # Standalone testing
 # -------------------------------------------------------------

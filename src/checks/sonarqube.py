@@ -1236,6 +1236,7 @@ def run_sonarqube_scan(
             "quality_gate": quality_gate,
             "total_issues": len(findings),
             "findings": findings,
+            "project_key": SONAR_PROJECT_KEY,
         }
 
         # =================================================
@@ -1307,6 +1308,7 @@ def run_sonarqube_scan(
     finally:
 
         cleanup_temp_directory(temp_dir)
+
 
 """
 # =========================================================
