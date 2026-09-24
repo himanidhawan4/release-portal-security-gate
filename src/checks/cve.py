@@ -14,7 +14,7 @@ from src import github_client
 OSV_API_URL = "https://api.osv.dev/v1/query"
 
 DEPENDENCY_ECOSYSTEMS = {
-    "requirements.txt": "PyPI",
+    ".txt": "PyPI",
     "package.json": "npm",
     "package-lock.json": "npm",
 }
@@ -109,18 +109,70 @@ def cvss_v4_score_to_severity(
     return "UNKNOWN"
 
 
+def extract_score_from_cvss_vector(
+    vector: str,
+) -> Optional[float]:
+    """
+    Extract an explicitly provided numeric CVSS score.
+
+    A normal CVSS vector such as:
+
+        CVSS:3.1/AV:N/AC:L/PR:N/UI:N/...
+
+    does not itself contain the final numeric score.
+
+    This function only extracts a score if the supplied
+    string explicitly contains one.
+    """
+
+    if not vector:
+        return None
+
+    value = str(vector).strip()
+
+    patterns = [
+        r"(?:score|baseScore)\s*[:=]\s*(\d+(?:\.\d+)?)",
+        r"(\d+(?:\.\d+)?)\s*$",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            value,
+            re.IGNORECASE,
+        )
+
+        if not match:
+            continue
+
+        try:
+            score = float(match.group(1))
+
+        except ValueError:
+            continue
+
+        if 0.0 <= score <= 10.0:
+            return score
+
+    return None
+
+
 def get_cvss_score(
     vulnerability: Dict[str, Any],
 ) -> Optional[float]:
     """
-    Extract the highest available CVSS score.
+    Extract the highest available numeric CVSS score.
     """
 
     scores: List[float] = []
 
     database_specific = vulnerability.get("database_specific")
 
-    if isinstance(database_specific, dict):
+    if isinstance(
+        database_specific,
+        dict,
+    ):
 
         score = database_specific.get("cvss_score")
 
@@ -128,7 +180,21 @@ def get_cvss_score(
             score,
             (int, float),
         ):
-            scores.append(float(score))
+
+            numeric_score = float(score)
+
+            if 0.0 <= numeric_score <= 10.0:
+                scores.append(numeric_score)
+
+        elif isinstance(
+            score,
+            str,
+        ):
+
+            parsed_score = extract_score_from_cvss_vector(score)
+
+            if parsed_score is not None:
+                scores.append(parsed_score)
 
     severity_entries = vulnerability.get("severity")
 
@@ -151,7 +217,21 @@ def get_cvss_score(
                 score,
                 (int, float),
             ):
-                scores.append(float(score))
+
+                numeric_score = float(score)
+
+                if 0.0 <= numeric_score <= 10.0:
+                    scores.append(numeric_score)
+
+            elif isinstance(
+                score,
+                str,
+            ):
+
+                parsed_score = extract_score_from_cvss_vector(score)
+
+                if parsed_score is not None:
+                    scores.append(parsed_score)
 
     if not scores:
         return None
@@ -167,10 +247,14 @@ def get_severity(
 
     Priority:
     1. database_specific severity
-    2. CVSS score
-    3. severity entries
+    2. numeric CVSS score
+    3. direct severity value
     4. UNKNOWN
     """
+
+    # --------------------------------------------------------
+    # 1. Database-specific severity
+    # --------------------------------------------------------
 
     database_specific = vulnerability.get("database_specific")
 
@@ -182,15 +266,60 @@ def get_severity(
         database_severity = database_specific.get("severity")
 
         if database_severity:
+
             normalized = normalize_severity(str(database_severity))
 
             if normalized != "UNKNOWN":
                 return normalized
 
+    # --------------------------------------------------------
+    # 2. CVSS numeric score
+    # --------------------------------------------------------
+
     score = get_cvss_score(vulnerability)
 
     if score is not None:
+
+        severity_entries = vulnerability.get("severity")
+
+        cvss_version = ""
+
+        if isinstance(
+            severity_entries,
+            list,
+        ):
+
+            for entry in severity_entries:
+
+                if not isinstance(
+                    entry,
+                    dict,
+                ):
+                    continue
+
+                entry_type = str(
+                    entry.get(
+                        "type",
+                        "",
+                    )
+                ).upper()
+
+                if "CVSS_V4" in entry_type:
+                    cvss_version = "V4"
+                    break
+
+                if "CVSS_V3" in entry_type:
+                    cvss_version = "V3"
+
+        if cvss_version == "V4":
+
+            return cvss_v4_score_to_severity(score)
+
         return cvss_v3_score_to_severity(score)
+
+    # --------------------------------------------------------
+    # 3. Direct severity value
+    # --------------------------------------------------------
 
     severity_entries = vulnerability.get("severity")
 
@@ -207,7 +336,7 @@ def get_severity(
             ):
                 continue
 
-            severity_value = entry.get("type")
+            severity_value = entry.get("severity")
 
             if severity_value:
 
@@ -241,14 +370,16 @@ def get_added_lines(
 
     current_line = 0
 
-    hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? " r"\+(\d+)(?:,\d+)? @@")
+    hunk_pattern = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
     for raw_line in patch.splitlines():
 
         hunk_match = hunk_pattern.match(raw_line)
 
         if hunk_match:
+
             current_line = int(hunk_match.group(1))
+
             continue
 
         if raw_line.startswith("\\"):
@@ -267,6 +398,7 @@ def get_added_lines(
             )
 
             current_line += 1
+
             continue
 
         if raw_line.startswith("-"):
@@ -283,7 +415,7 @@ def get_added_lines(
 
 
 # ============================================================
-# REQUIREMENTS.TXT
+# REQUIREMENTS / ANY .TXT FILE
 # ============================================================
 
 
@@ -291,7 +423,15 @@ def parse_requirements_line(
     line: str,
 ) -> Optional[Tuple[str, str]]:
     """
-    Parse an exact version dependency from requirements.txt.
+    Parse an exact version dependency from any .txt file.
+
+    Examples:
+
+        requests==2.31.0
+        flask==3.1.0
+        urllib3==2.0.7
+
+    Only exact == versions are scanned.
     """
 
     line = line.strip()
@@ -302,10 +442,8 @@ def parse_requirements_line(
     if line.startswith("#"):
         return None
 
-    line = line.split(
-        "#",
-        1,
-    )[0].strip()
+    # Remove inline comments
+    line = line.split("#", 1)[0].strip()
 
     pattern = re.match(
         r"^([A-Za-z0-9_.-]+)\s*" r"(==|>=|<=|>|<|~=)\s*" r"([A-Za-z0-9!+_.-]+)",
@@ -316,7 +454,9 @@ def parse_requirements_line(
         return None
 
     package = pattern.group(1)
+
     operator = pattern.group(2)
+
     version = pattern.group(3)
 
     # Only exact versions are scanned.
@@ -347,6 +487,7 @@ def parse_package_json(
         return None
 
     package = pattern.group(1)
+
     version_spec = pattern.group(2).strip()
 
     version_spec = re.sub(
@@ -437,6 +578,7 @@ def parse_version_tuple(
 ) -> Optional[Tuple[int, int, int]]:
     """
     Convert a basic semantic version into:
+
         (major, minor, patch)
 
     Pre-release/build metadata is ignored.
@@ -577,8 +719,11 @@ def version_is_affected(
             introduced_text = str(introduced).strip()
 
             if introduced_text == "0":
+
                 introduced_version = None
+
             else:
+
                 introduced_version = parse_version_tuple(introduced_text)
 
         fixed = event.get("fixed")
@@ -587,6 +732,9 @@ def version_is_affected(
 
             fixed_text = clean_fixed_version(str(fixed))
 
+            if fixed_text is None:
+                continue
+
             fixed_version = parse_version_tuple(fixed_text)
 
             if fixed_version:
@@ -594,6 +742,7 @@ def version_is_affected(
                 lower_ok = introduced_version is None or installed >= introduced_version
 
                 if lower_ok and installed < fixed_version:
+
                     return True, fixed_text
 
                 introduced_version = None
@@ -604,6 +753,9 @@ def version_is_affected(
 
             last_text = clean_fixed_version(str(last_affected))
 
+            if last_text is None:
+                continue
+
             last_version = parse_version_tuple(last_text)
 
             if last_version:
@@ -611,6 +763,7 @@ def version_is_affected(
                 lower_ok = introduced_version is None or installed >= introduced_version
 
                 if lower_ok and installed <= last_version:
+
                     return True, None
 
                 introduced_version = None
@@ -626,11 +779,8 @@ def get_affected_status(
     Check whether the installed version is actually affected.
 
     If an OSV entry contains an explicit versions list and
-    the installed version is not in that list, the entry is
-    ignored.
-
-    This prevents false positives from unrelated version
-    branches.
+    the installed version is not in that list, the entry
+    is ignored.
     """
 
     affected = vulnerability.get("affected")
@@ -672,9 +822,6 @@ def get_affected_status(
 
             version_set = {str(version).strip() for version in versions}
 
-            # IMPORTANT:
-            # If the installed version is not explicitly
-            # listed, do not fall through to ranges.
             if installed_version not in version_set:
                 continue
 
@@ -707,6 +854,7 @@ def get_affected_status(
                     )
 
                     if affected_version:
+
                         return (
                             True,
                             fixed_version,
@@ -753,6 +901,7 @@ def get_affected_status(
             )
 
             if affected_version:
+
                 return (
                     True,
                     fixed_version,
@@ -816,6 +965,22 @@ def query_osv(
 
         raise
 
+    # --------------------------------------------------------
+    # Make sure OSV returned a dictionary.
+    # --------------------------------------------------------
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+
+        print(
+            "OSV returned an unexpected JSON structure.",
+            file=sys.stderr,
+        )
+
+        return []
+
     vulnerabilities = data.get(
         "vulns",
         [],
@@ -827,7 +992,14 @@ def query_osv(
     ):
         return []
 
-    return vulnerabilities
+    return [
+        vulnerability
+        for vulnerability in vulnerabilities
+        if isinstance(
+            vulnerability,
+            dict,
+        )
+    ]
 
 
 # ============================================================
@@ -840,13 +1012,6 @@ def get_advisory_identifiers(
 ) -> set:
     """
     Return the vulnerability ID and all aliases.
-
-    Example:
-
-        GHSA-xxxx
-        PYSEC-xxxx
-
-    may appear in the same OSV record's aliases.
     """
 
     identifiers = set()
@@ -854,6 +1019,7 @@ def get_advisory_identifiers(
     vulnerability_id = vulnerability.get("id")
 
     if vulnerability_id:
+
         identifiers.add(str(vulnerability_id).strip().upper())
 
     aliases = vulnerability.get("aliases")
@@ -866,6 +1032,7 @@ def get_advisory_identifiers(
         for alias in aliases:
 
             if alias:
+
                 identifiers.add(str(alias).strip().upper())
 
     return identifiers
@@ -910,19 +1077,8 @@ def deduplicate_osv_vulnerabilities(
     """
     Remove duplicate OSV advisories.
 
-    GHSA and PYSEC records can describe the same underlying
-    vulnerability.
-
-    Example:
-
-        GHSA-xxxx
-        PYSEC-xxxx
-
-    If their identifiers/aliases overlap, they are treated
-    as the same vulnerability.
-
-    The preferred record is kept, normally the GHSA record
-    because it usually contains the useful severity data.
+    GHSA and PYSEC records can describe the same
+    underlying vulnerability.
     """
 
     groups: List[
@@ -943,12 +1099,14 @@ def deduplicate_osv_vulnerabilities(
         identifiers = get_advisory_identifiers(vulnerability)
 
         if not identifiers:
+
             groups.append(
                 (
                     set(),
                     vulnerability,
                 )
             )
+
             continue
 
         matched_group = None
@@ -961,6 +1119,7 @@ def deduplicate_osv_vulnerabilities(
             if identifiers.intersection(group_identifiers):
 
                 matched_group = index
+
                 break
 
         if matched_group is None:
@@ -1068,6 +1227,7 @@ def get_fixed_versions(
                     cleaned = clean_fixed_version(str(fixed))
 
                     if cleaned:
+
                         fixed_versions.append(cleaned)
 
     return list(dict.fromkeys(fixed_versions))
@@ -1163,6 +1323,14 @@ def check_vulnerabilities(
     """
     Scan dependencies changed in a GitHub Pull Request.
 
+    Supported dependency files:
+
+        *.txt
+        package.json
+        package-lock.json
+
+    Every .txt file is treated as a PyPI dependency file.
+
     Only added dependency lines are scanned.
 
     Source-code contents are never stored in the result.
@@ -1172,32 +1340,95 @@ def check_vulnerabilities(
 
     findings: List[Dict[str, Any]] = []
 
-    # Unique dependency:
-    # package + version + ecosystem
     scanned_dependencies = set()
 
     total_dependencies = 0
+
+    # ========================================================
+    # GITHUB RESPONSE VALIDATION
+    # ========================================================
+
+    if not isinstance(
+        details,
+        dict,
+    ):
+
+        print(
+            "GitHub returned no valid PR details.",
+            file=sys.stderr,
+        )
+
+        return {
+            "tool": "OSV",
+            "status": "ERROR",
+            "verdict": "FAIL",
+            "total_dependencies": 0,
+            "vulnerable_dependencies": 0,
+            "total_vulnerabilities": 0,
+            "findings": [],
+        }
 
     changed_files = details.get(
         "changed_files",
         [],
     )
 
+    if not isinstance(
+        changed_files,
+        list,
+    ):
+        changed_files = []
+
+    # ========================================================
+    # SCAN CHANGED FILES
+    # ========================================================
+
     for file_name, patch in changed_files:
+
+        # ----------------------------------------------------
+        # Validate file name
+        # ----------------------------------------------------
+
+        if not isinstance(
+            file_name,
+            str,
+        ):
+            continue
+
+        file_name_lower = file_name.lower()
 
         ecosystem = None
 
-        if file_name.endswith("requirements.txt"):
+        # ----------------------------------------------------
+        # package-lock.json
+        # ----------------------------------------------------
+
+        if file_name_lower.endswith("package-lock.json"):
+
+            ecosystem = "npm"
+
+        # ----------------------------------------------------
+        # package.json
+        # ----------------------------------------------------
+
+        elif file_name_lower.endswith("package.json"):
+
+            ecosystem = "npm"
+
+        # ----------------------------------------------------
+        # ANY .txt FILE
+        # ----------------------------------------------------
+
+        elif file_name_lower.endswith(".txt"):
+
             ecosystem = "PyPI"
-
-        elif file_name.endswith("package.json"):
-            ecosystem = "npm"
-
-        elif file_name.endswith("package-lock.json"):
-            ecosystem = "npm"
 
         else:
             continue
+
+        # ----------------------------------------------------
+        # Parse added lines
+        # ----------------------------------------------------
 
         added_lines = get_added_lines(patch)
 
@@ -1206,28 +1437,28 @@ def check_vulnerabilities(
             dependency = None
 
             # ------------------------------------------------
-            # requirements.txt
+            # ANY .TXT FILE
             # ------------------------------------------------
 
-            if file_name.endswith("requirements.txt"):
+            if file_name_lower.endswith(".txt"):
 
                 dependency = parse_requirements_line(line)
 
             # ------------------------------------------------
-            # package.json
+            # PACKAGE-LOCK.JSON
             # ------------------------------------------------
 
-            elif file_name.endswith("package.json"):
-
-                dependency = parse_package_json(line)
-
-            # ------------------------------------------------
-            # package-lock.json
-            # ------------------------------------------------
-
-            elif file_name.endswith("package-lock.json"):
+            elif file_name_lower.endswith("package-lock.json"):
 
                 dependency = parse_package_lock_line(line)
+
+            # ------------------------------------------------
+            # PACKAGE.JSON
+            # ------------------------------------------------
+
+            elif file_name_lower.endswith("package.json"):
+
+                dependency = parse_package_json(line)
 
             if not dependency:
                 continue
@@ -1356,13 +1587,6 @@ def check_vulnerabilities(
 
     # ========================================================
     # FINAL SAFETY DEDUPLICATION
-    # ========================================================
-    #
-    # This is a second protection layer.
-    #
-    # If two records still have the same package/version/id,
-    # only one finding is retained.
-    #
     # ========================================================
 
     unique_findings: List[Dict[str, Any]] = []
