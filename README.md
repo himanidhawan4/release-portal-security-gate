@@ -565,3 +565,41 @@ GitHub: `https://github.com/himanidhawan4/release-portal-security-gate`
 > **A risk-aware DevSecOps security gate that analyzes GitHub Pull Requests using secret detection, IAM analysis, OSV.dev dependency vulnerability scanning and SonarCloud, combines the findings into a risk score, and returns an ALLOW / BLOCK release decision with reasons and recommendations.**
 
 **Detect → Score → Explain → Recommend → Decide** 🔐
+
+---
+
+## Screenshots
+
+![Screenshot 1](screenshots/Screenshot%202026-10-19%20112157.png)
+
+![Screenshot 2](screenshots/Screenshot%202026-10-19%20112210.png)
+
+![Screenshot 3](screenshots/Screenshot%202026-10-19%20112220.png)
+
+![Screenshot 4](screenshots/Screenshot%202026-10-19%20112232.png)
+
+![Screenshot 5](screenshots/Screenshot%202026-10-19%20112239.png)
+
+![Screenshot 6](screenshots/Screenshot%202026-10-19%20112247.png)
+
+![Screenshot 7](screenshots/Screenshot%202026-10-19%20112254.png)
+
+![Screenshot 8](screenshots/Screenshot%202026-10-19%20112301.png)
+
+![Screenshot 9](screenshots/Screenshot%202026-10-19%20112310.png)
+
+![Screenshot 10](screenshots/Screenshot%202026-10-19%20112323.png)
+
+![Screenshot 11](screenshots/Screenshot%202026-10-19%20112333.png)
+
+![Screenshot 12](screenshots/Screenshot%202026-10-19%20112344.png)
+
+![Screenshot 13](screenshots/Screenshot%202026-10-19%20112418.png)
+
+![Screenshot 14](screenshots/Screenshot%202026-10-19%20112429.png)
+
+![Screenshot 15](screenshots/Screenshot%202026-10-19%20112440.png)
+
+![Screenshot 16](screenshots/Screenshot%202026-10-19%20112453.png)
+
+![Screenshot 17](screenshots/Screenshot%202026-10-19%20112504.png)
