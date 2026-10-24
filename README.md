@@ -568,38 +568,41 @@ GitHub: `https://github.com/himanidhawan4/release-portal-security-gate`
 
 ---
 
+
 ## Screenshots
 
-![Screenshot 1](screenshots/Screenshot%202026-10-19%20112157.png)
+![Screenshot 1](screenshots/Screenshot%202026-10-24%20190217.png)
 
-![Screenshot 2](screenshots/Screenshot%202026-10-19%20112210.png)
+![Screenshot 2](screenshots/Screenshot%202026-10-24%20192810.png)
 
-![Screenshot 3](screenshots/Screenshot%202026-10-19%20112220.png)
+![Screenshot 3](screenshots/Screenshot%202026-10-24%20202021.png)
 
-![Screenshot 4](screenshots/Screenshot%202026-10-19%20112232.png)
+![Screenshot 4](screenshots/Screenshot%202026-10-24%20202033.png)
 
-![Screenshot 5](screenshots/Screenshot%202026-10-19%20112239.png)
+![Screenshot 5](screenshots/Screenshot%202026-10-24%20202041.png)
 
-![Screenshot 6](screenshots/Screenshot%202026-10-19%20112247.png)
+![Screenshot 6](screenshots/Screenshot%202026-10-24%20202051.png)
 
-![Screenshot 7](screenshots/Screenshot%202026-10-19%20112254.png)
+![Screenshot 7](screenshots/Screenshot%202026-10-24%20202059.png)
 
-![Screenshot 8](screenshots/Screenshot%202026-10-19%20112301.png)
+![Screenshot 8](screenshots/Screenshot%202026-10-24%20202109.png)
 
-![Screenshot 9](screenshots/Screenshot%202026-10-19%20112310.png)
+![Screenshot 9](screenshots/Screenshot%202026-10-24%20202119.png)
 
-![Screenshot 10](screenshots/Screenshot%202026-10-19%20112323.png)
+![Screenshot 10](screenshots/Screenshot%202026-10-24%20202136.png)
 
-![Screenshot 11](screenshots/Screenshot%202026-10-19%20112333.png)
+![Screenshot 11](screenshots/Screenshot%202026-10-24%20202148.png)
 
-![Screenshot 12](screenshots/Screenshot%202026-10-19%20112344.png)
+![Screenshot 12](screenshots/Screenshot%202026-10-24%20202157.png)
 
-![Screenshot 13](screenshots/Screenshot%202026-10-19%20112418.png)
+![Screenshot 13](screenshots/Screenshot%202026-10-24%20202206.png)
 
-![Screenshot 14](screenshots/Screenshot%202026-10-19%20112429.png)
+![Screenshot 14](screenshots/Screenshot%202026-10-24%20202216.png)
 
-![Screenshot 15](screenshots/Screenshot%202026-10-19%20112440.png)
+![Screenshot 15](screenscreenshots/Screenshot%202026-10-24%20202224.png)
 
-![Screenshot 16](screenshots/Screenshot%202026-10-19%20112453.png)
+![Screenshot 16](screenshots/Screenshot%202026-10-24%20202235.png)
 
-![Screenshot 17](screenshots/Screenshot%202026-10-19%20112504.png)
+![Screenshot 17](screenshots/Screenshot%202026-10-24%20202244.png)
+
+![Screenshot 18](screenshots/Screenshot%202026-10-24%20202257.png)

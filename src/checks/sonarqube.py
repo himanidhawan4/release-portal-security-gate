@@ -953,17 +953,19 @@ def run_sonarqube_scan(
 
         scanner_command = [
             scanner,
-            f"-Dsonar.host.url=" f"{SONAR_HOST}",
-            f"-Dsonar.token=" f"{SONAR_TOKEN}",
-            f"-Dsonar.organization=" f"{SONAR_ORGANIZATION}",
-            f"-Dsonar.projectKey=" f"{SONAR_PROJECT_KEY}",
-            f"-Dsonar.projectName=" f"{repo}",
-            # Dynamic PR number
-            f"-Dsonar.pullrequest.key=" f"{pull_number}",
-            # Dynamic source branch
-            f"-Dsonar.pullrequest.branch=" f"{head_branch}",
-            # Dynamic target branch
-            f"-Dsonar.pullrequest.base=" f"{base_branch}",
+            "-Dsonar.scanner.skipJreProvisioning=true",
+            f"-Dsonar.host.url={SONAR_HOST}",
+            f"-Dsonar.token={SONAR_TOKEN}",
+            f"-Dsonar.organization={SONAR_ORGANIZATION}",
+            f"-Dsonar.projectKey={SONAR_PROJECT_KEY}",
+            f"-Dsonar.projectName={repo}",
+            # Explicitly configure source analysis for this test
+            "-Dsonar.sources=.",
+            "-Dsonar.python.version=3.10-3.14",
+            "-Dsonar.tests=",
+            f"-Dsonar.pullrequest.key={pull_number}",
+            f"-Dsonar.pullrequest.branch={head_branch}",
+            f"-Dsonar.pullrequest.base={base_branch}",
         ]
 
         scan_result = subprocess.run(
@@ -1310,7 +1312,6 @@ def run_sonarqube_scan(
         cleanup_temp_directory(temp_dir)
 
 
-"""
 # =========================================================
 # COMMAND-LINE ENTRY POINT
 # =========================================================
@@ -1371,4 +1372,3 @@ if __name__ == "__main__":
         pr_url,
         include_details=include_details,
     )
-"""
